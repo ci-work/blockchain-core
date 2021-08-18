@@ -308,7 +308,7 @@ calculate_rewards_metadata(Start, End, Chain) ->
         %% so we will do that top level work here. If we get a thrown error while
         %% we are folding, we will abort reward calculation.
         Results0 = fold_blocks_for_rewards(Start, End, Chain,
-                                          Vars, Ledger, AccInit),
+                                           Vars, Ledger, AccInit),
 
         %% Forcing calculation of the EpochReward amount for the CG to always
         %% be around ElectionInterval (30 blocks) so that there is less incentive
@@ -696,22 +696,25 @@ calculate_epoch_reward(Version, Start, End, Ledger) ->
     {ok, ElectionInterval} = blockchain:config(?election_interval, Ledger),
     {ok, BlockTime0} = blockchain:config(?block_time, Ledger),
     {ok, MonthlyReward} = blockchain:config(?monthly_reward, Ledger),
-    Reward = calculate_epoch_reward(Version, Start, End, BlockTime0,
-                                    ElectionInterval, MonthlyReward),
+    calculate_epoch_reward(Version, Start, End, BlockTime0,
+                           ElectionInterval, MonthlyReward, Ledger).
+
+calculate_net_emissions_reward(Ledger) ->
     case blockchain:config(?net_emissions_enabled, Ledger) of
         {ok, true} ->
             %% initial proposed max 34.24
             {ok, Max} = blockchain:config(?net_emissions_max_rate, Ledger),
             {ok, Burned} = blockchain_ledger_v1:hnt_burned(Ledger),
             {ok, Overage} = blockchain_ledger_v1:net_overage(Ledger),
-            Reward + min(Max, Burned + Overage);
+            min(Max, Burned + Overage);
         _ ->
-            Reward
+            0
     end.
 
 -spec calculate_epoch_reward(pos_integer(), pos_integer(), pos_integer(),
-                             pos_integer(), pos_integer(), pos_integer()) -> float().
-calculate_epoch_reward(Version, Start, End, BlockTime0, _ElectionInterval, MonthlyReward) when Version >= 2 ->
+                             pos_integer(), pos_integer(), pos_integer(),
+                             blockchain_ledger_v1:ledger()) -> float().
+calculate_epoch_reward(Version, Start, End, BlockTime0, _ElectionInterval, MonthlyReward, Ledger) when Version >= 2 ->
     BlockTime1 = (BlockTime0/1000),
     % Convert to blocks per min
     BlockPerMin = 60/BlockTime1,
@@ -720,8 +723,10 @@ calculate_epoch_reward(Version, Start, End, BlockTime0, _ElectionInterval, Month
     % Calculate election interval in blocks
     ElectionInterval = End - Start,
     ElectionPerHour = BlockPerHour/ElectionInterval,
-    MonthlyReward/30/24/ElectionPerHour;
-calculate_epoch_reward(_Version, _Start, _End, BlockTime0, ElectionInterval, MonthlyReward) ->
+    Reward = MonthlyReward/30/24/ElectionPerHour,
+    Extra = calculate_net_emissions_reward(Ledger),
+    Reward + Extra;
+calculate_epoch_reward(_Version, _Start, _End, BlockTime0, ElectionInterval, MonthlyReward, Ledger) ->
     BlockTime1 = (BlockTime0/1000),
     % Convert to blocks per min
     BlockPerMin = 60/BlockTime1,
@@ -729,7 +734,9 @@ calculate_epoch_reward(_Version, _Start, _End, BlockTime0, ElectionInterval, Mon
     BlockPerHour = BlockPerMin*60,
     % Calculate number of elections per hour
     ElectionPerHour = BlockPerHour/ElectionInterval,
-    MonthlyReward/30/24/ElectionPerHour.
+    Reward = MonthlyReward/30/24/ElectionPerHour,
+    Extra = calculate_net_emissions_reward(Ledger),
+    Reward + Extra.
 
 -spec consensus_members_rewards(blockchain_ledger_v1:ledger(),
                                 reward_vars(),
