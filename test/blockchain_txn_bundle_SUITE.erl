@@ -152,7 +152,7 @@ negative_test(Config) ->
 
     %% check initial balances
     5000 = miner_ct_utils:get_balance(Src, SrcAddr),
-    5000 = miner_ct_utils:get_balance(Dst, SrcAddr),
+    5000 = miner_ct_utils:get_balance(Dst, DstAddr),
 
     %% Create first payment txn
     Txn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 1]),
@@ -192,7 +192,7 @@ double_spend_test(Config) ->
 
     %% check initial balances
     5000 = miner_ct_utils:get_balance(Src, SrcAddr),
-    5000 = miner_ct_utils:get_balance(Dst, SrcAddr),
+    5000 = miner_ct_utils:get_balance(Dst, DstAddr),
     5000 = miner_ct_utils:get_balance(Other, OtherAddr),
 
     %% Create first payment txn
@@ -562,7 +562,7 @@ single_txn_bundle_test(Config) ->
 
     %% check initial balances
     5000 = miner_ct_utils:get_balance(Src, SrcAddr),
-    5000 = miner_ct_utils:get_balance(Dst, SrcAddr),
+    5000 = miner_ct_utils:get_balance(Dst, DstAddr),
 
     %% Create first payment txn
     Txn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 1]),
@@ -593,7 +593,7 @@ bundleception_test(Config) ->
 
     %% check initial balances
     5000 = miner_ct_utils:get_balance(Src, SrcAddr),
-    5000 = miner_ct_utils:get_balance(Dst, SrcAddr),
+    5000 = miner_ct_utils:get_balance(Dst, DstAddr),
 
     %% Src Sigfun
     {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Src, blockchain_swarm, keys, []),
