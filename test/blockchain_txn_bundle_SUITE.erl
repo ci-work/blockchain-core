@@ -103,31 +103,31 @@ basic_test(Cfg) ->
     ConsensusMembers = ?config(consensus_members, Cfg),
     Chain = ?config(chain, Cfg),
 
-    %% Payer needs a starting balance, so we pick one from the consensus group.
-    [{PayerAddr, {_, _, _}} | _] = ConsensusMembers,
-    PayerBalance = balance(Chain, PayerAddr),
-    PayerNonce = nonce(Chain, PayerAddr),
+    %% Src needs a starting balance, so we pick one from the consensus group.
+    [{SrcAddr, {_, _, _}} | _] = ConsensusMembers,
+    SrcBalance = balance(Chain, SrcAddr),
+    SrcNonce = nonce(Chain, SrcAddr),
 
-    %% Payee has no need for a starting balance, so we use an arbitrary address.
-    PayeeAddr = gen_addr(), % dead-end address, since we'll never pay from it.
-    PayeeBalance = balance(Chain, PayeeAddr),
+    %% Dst has no need for a starting balance, so we use an arbitrary address.
+    DstAddr = gen_addr(), % dead-end address, since we'll never pay from it.
+    DstBalance = balance(Chain, DstAddr),
 
     %% Expected initial values:
-    ?assertEqual(0, PayerNonce),
-    ?assertEqual(5000, PayerBalance),
-    ?assertEqual(0, PayeeBalance),
+    ?assertEqual(0, SrcNonce),
+    ?assertEqual(5000, SrcBalance),
+    ?assertEqual(0, DstBalance),
 
     AmountPerTxn = 1000,
     AmountTotal = 2 * AmountPerTxn,
 
     %% First payment txn
-    Txn1 = blockchain_txn_payment_v1:new(PayerAddr, PayeeAddr, AmountPerTxn, PayerNonce + 1),
+    Txn1 = blockchain_txn_payment_v1:new(SrcAddr, DstAddr, AmountPerTxn, SrcNonce + 1),
     {ok, _, SigFun, _} = blockchain_swarm:keys(),
     SignedTxn1 = blockchain_txn_payment_v1:sign(Txn1, SigFun),
     ct:pal("SignedTxn1: ~p", [SignedTxn1]),
 
     %% Second payment txn
-    Txn2 = blockchain_txn_payment_v1:new(PayerAddr, PayeeAddr, AmountPerTxn, PayerNonce + 2),
+    Txn2 = blockchain_txn_payment_v1:new(SrcAddr, DstAddr, AmountPerTxn, SrcNonce + 2),
     {ok, _, SigFun, _} = blockchain_swarm:keys(),
     SignedTxn2 = blockchain_txn_payment_v1:sign(Txn2, SigFun),
     ct:pal("SignedTxn2: ~p", [SignedTxn2]),
@@ -139,35 +139,35 @@ basic_test(Cfg) ->
     %% Commit bundle txn
     ok = chain_commit(Chain, ConsensusMembers, BundleTxn),
 
-    ?assertEqual(PayerBalance - AmountTotal, balance(Chain, PayerAddr)),
-    ?assertEqual(PayeeBalance + AmountTotal, balance(Chain, PayeeAddr)),
+    ?assertEqual(SrcBalance - AmountTotal, balance(Chain, SrcAddr)),
+    ?assertEqual(DstBalance + AmountTotal, balance(Chain, DstAddr)),
 
     ok.
 
 negative_test(Config) ->
     Miners = ?config(miners, Config),
-    [Payer, Payee | _Tail] = Miners,
-    PayerAddr = ct_rpc:call(Payer, blockchain_swarm, pubkey_bin, []),
-    PayeeAddr = ct_rpc:call(Payee, blockchain_swarm, pubkey_bin, []),
+    [Src, Dst | _Tail] = Miners,
+    SrcAddr = ct_rpc:call(Src, blockchain_swarm, pubkey_bin, []),
+    DstAddr = ct_rpc:call(Dst, blockchain_swarm, pubkey_bin, []),
 
     %% check initial balances
-    5000 = miner_ct_utils:get_balance(Payer, PayerAddr),
-    5000 = miner_ct_utils:get_balance(Payee, PayerAddr),
+    5000 = miner_ct_utils:get_balance(Src, SrcAddr),
+    5000 = miner_ct_utils:get_balance(Dst, SrcAddr),
 
     %% Create first payment txn
-    Txn1 = ct_rpc:call(Payer, blockchain_txn_payment_v1, new, [PayerAddr, PayeeAddr, 1000, 1]),
-    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Payer, blockchain_swarm, keys, []),
-    SignedTxn1 = ct_rpc:call(Payer, blockchain_txn_payment_v1, sign, [Txn1, SigFun]),
+    Txn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 1]),
+    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Src, blockchain_swarm, keys, []),
+    SignedTxn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn1, SigFun]),
     ct:pal("SignedTxn1: ~p", [SignedTxn1]),
 
     %% Create second payment txn
-    Txn2 = ct_rpc:call(Payer, blockchain_txn_payment_v1, new, [PayerAddr, PayeeAddr, 1000, 2]),
-    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Payer, blockchain_swarm, keys, []),
-    SignedTxn2 = ct_rpc:call(Payer, blockchain_txn_payment_v1, sign, [Txn2, SigFun]),
+    Txn2 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 2]),
+    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Src, blockchain_swarm, keys, []),
+    SignedTxn2 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn2, SigFun]),
     ct:pal("SignedTxn2: ~p", [SignedTxn2]),
 
     %% Create bundle with txns reversed, ideally making it invalid
-    BundleTxn = ct_rpc:call(Payer, blockchain_txn_bundle_v1, new, [[SignedTxn2, SignedTxn1]]),
+    BundleTxn = ct_rpc:call(Src, blockchain_txn_bundle_v1, new, [[SignedTxn2, SignedTxn1]]),
     ct:pal("BundleTxn: ~p", [BundleTxn]),
 
     %% Submit the bundle txn
@@ -178,37 +178,37 @@ negative_test(Config) ->
     ok = miner_ct_utils:wait_for_gte(height, Miners, 15),
 
     %% the balances should not have changed since the bundle was invalid
-    5000 = miner_ct_utils:get_balance(Payer, PayerAddr),
-    5000 = miner_ct_utils:get_balance(Payee, PayeeAddr),
+    5000 = miner_ct_utils:get_balance(Src, SrcAddr),
+    5000 = miner_ct_utils:get_balance(Dst, DstAddr),
 
     ok.
 
 double_spend_test(Config) ->
     Miners = ?config(miners, Config),
-    [Payer, Payee, Other | _Tail] = Miners,
-    PayerAddr = ct_rpc:call(Payer, blockchain_swarm, pubkey_bin, []),
-    PayeeAddr = ct_rpc:call(Payee, blockchain_swarm, pubkey_bin, []),
+    [Src, Dst, Other | _Tail] = Miners,
+    SrcAddr = ct_rpc:call(Src, blockchain_swarm, pubkey_bin, []),
+    DstAddr = ct_rpc:call(Dst, blockchain_swarm, pubkey_bin, []),
     OtherAddr = ct_rpc:call(Other, blockchain_swarm, pubkey_bin, []),
 
     %% check initial balances
-    5000 = miner_ct_utils:get_balance(Payer, PayerAddr),
-    5000 = miner_ct_utils:get_balance(Payee, PayerAddr),
+    5000 = miner_ct_utils:get_balance(Src, SrcAddr),
+    5000 = miner_ct_utils:get_balance(Dst, SrcAddr),
     5000 = miner_ct_utils:get_balance(Other, OtherAddr),
 
     %% Create first payment txn
-    Txn1 = ct_rpc:call(Payer, blockchain_txn_payment_v1, new, [PayerAddr, PayeeAddr, 1000, 1]),
-    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Payer, blockchain_swarm, keys, []),
-    SignedTxn1 = ct_rpc:call(Payer, blockchain_txn_payment_v1, sign, [Txn1, SigFun]),
+    Txn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 1]),
+    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Src, blockchain_swarm, keys, []),
+    SignedTxn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn1, SigFun]),
     ct:pal("SignedTxn1: ~p", [SignedTxn1]),
 
     %% Create second payment txn, where payer is trying to double spend (same nonce).
-    Txn2 = ct_rpc:call(Payer, blockchain_txn_payment_v1, new, [PayerAddr, OtherAddr, 1000, 1]),
-    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Payer, blockchain_swarm, keys, []),
-    SignedTxn2 = ct_rpc:call(Payer, blockchain_txn_payment_v1, sign, [Txn2, SigFun]),
+    Txn2 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, OtherAddr, 1000, 1]),
+    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Src, blockchain_swarm, keys, []),
+    SignedTxn2 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn2, SigFun]),
     ct:pal("SignedTxn2: ~p", [SignedTxn2]),
 
     %% Create bundle with txns reversed, ideally making it invalid
-    BundleTxn = ct_rpc:call(Payer, blockchain_txn_bundle_v1, new, [[SignedTxn1, SignedTxn2]]),
+    BundleTxn = ct_rpc:call(Src, blockchain_txn_bundle_v1, new, [[SignedTxn1, SignedTxn2]]),
     ct:pal("BundleTxn: ~p", [BundleTxn]),
 
     %% Submit the bundle txn
@@ -219,8 +219,8 @@ double_spend_test(Config) ->
     ok = miner_ct_utils:wait_for_gte(height, Miners, 15),
 
     %% the balances should not have changed since the bundle was invalid
-    5000 = miner_ct_utils:get_balance(Payer, PayerAddr),
-    5000 = miner_ct_utils:get_balance(Payee, PayeeAddr),
+    5000 = miner_ct_utils:get_balance(Src, SrcAddr),
+    5000 = miner_ct_utils:get_balance(Dst, DstAddr),
     5000 = miner_ct_utils:get_balance(Other, OtherAddr),
 
     ok.
@@ -556,22 +556,22 @@ invalid_add_assert_test(Config) ->
 
 single_txn_bundle_test(Config) ->
     Miners = ?config(miners, Config),
-    [Payer, Payee | _Tail] = Miners,
-    PayerAddr = ct_rpc:call(Payer, blockchain_swarm, pubkey_bin, []),
-    PayeeAddr = ct_rpc:call(Payee, blockchain_swarm, pubkey_bin, []),
+    [Src, Dst | _Tail] = Miners,
+    SrcAddr = ct_rpc:call(Src, blockchain_swarm, pubkey_bin, []),
+    DstAddr = ct_rpc:call(Dst, blockchain_swarm, pubkey_bin, []),
 
     %% check initial balances
-    5000 = miner_ct_utils:get_balance(Payer, PayerAddr),
-    5000 = miner_ct_utils:get_balance(Payee, PayerAddr),
+    5000 = miner_ct_utils:get_balance(Src, SrcAddr),
+    5000 = miner_ct_utils:get_balance(Dst, SrcAddr),
 
     %% Create first payment txn
-    Txn1 = ct_rpc:call(Payer, blockchain_txn_payment_v1, new, [PayerAddr, PayeeAddr, 1000, 1]),
-    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Payer, blockchain_swarm, keys, []),
-    SignedTxn1 = ct_rpc:call(Payer, blockchain_txn_payment_v1, sign, [Txn1, SigFun]),
+    Txn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 1]),
+    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Src, blockchain_swarm, keys, []),
+    SignedTxn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn1, SigFun]),
     ct:pal("SignedTxn1: ~p", [SignedTxn1]),
 
     %% Create bundle
-    BundleTxn = ct_rpc:call(Payer, blockchain_txn_bundle_v1, new, [[SignedTxn1]]),
+    BundleTxn = ct_rpc:call(Src, blockchain_txn_bundle_v1, new, [[SignedTxn1]]),
     ct:pal("BundleTxn: ~p", [BundleTxn]),
     %% Submit the bundle txn
     miner_ct_utils:submit_txn(BundleTxn, Miners),
@@ -580,61 +580,61 @@ single_txn_bundle_test(Config) ->
     ok = miner_ct_utils:wait_for_gte(height, Miners, 15),
 
     %% The bundle is invalid since it does not contain atleast two txns in it
-    5000 = miner_ct_utils:get_balance(Payer, PayerAddr),
-    5000 = miner_ct_utils:get_balance(Payee, PayeeAddr),
+    5000 = miner_ct_utils:get_balance(Src, SrcAddr),
+    5000 = miner_ct_utils:get_balance(Dst, DstAddr),
 
     ok.
 
 bundleception_test(Config) ->
     Miners = ?config(miners, Config),
-    [Payer, Payee | _Tail] = Miners,
-    PayerAddr = ct_rpc:call(Payer, blockchain_swarm, pubkey_bin, []),
-    PayeeAddr = ct_rpc:call(Payee, blockchain_swarm, pubkey_bin, []),
+    [Src, Dst | _Tail] = Miners,
+    SrcAddr = ct_rpc:call(Src, blockchain_swarm, pubkey_bin, []),
+    DstAddr = ct_rpc:call(Dst, blockchain_swarm, pubkey_bin, []),
 
     %% check initial balances
-    5000 = miner_ct_utils:get_balance(Payer, PayerAddr),
-    5000 = miner_ct_utils:get_balance(Payee, PayerAddr),
+    5000 = miner_ct_utils:get_balance(Src, SrcAddr),
+    5000 = miner_ct_utils:get_balance(Dst, SrcAddr),
 
-    %% Payer Sigfun
-    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Payer, blockchain_swarm, keys, []),
+    %% Src Sigfun
+    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Src, blockchain_swarm, keys, []),
 
     %% --------------------------------------------------------------
     %% Bundle 1 contents
     %% Create first payment txn
-    Txn1 = ct_rpc:call(Payer, blockchain_txn_payment_v1, new, [PayerAddr, PayeeAddr, 1000, 1]),
-    SignedTxn1 = ct_rpc:call(Payer, blockchain_txn_payment_v1, sign, [Txn1, SigFun]),
+    Txn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 1]),
+    SignedTxn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn1, SigFun]),
     ct:pal("SignedTxn1: ~p", [SignedTxn1]),
 
     %% Create second payment txn
-    Txn2 = ct_rpc:call(Payer, blockchain_txn_payment_v1, new, [PayerAddr, PayeeAddr, 1000, 2]),
-    SignedTxn2 = ct_rpc:call(Payer, blockchain_txn_payment_v1, sign, [Txn2, SigFun]),
+    Txn2 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 2]),
+    SignedTxn2 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn2, SigFun]),
     ct:pal("SignedTxn2: ~p", [SignedTxn2]),
 
     %% Create bundle
-    BundleTxn1 = ct_rpc:call(Payer, blockchain_txn_bundle_v1, new, [[SignedTxn1, SignedTxn2]]),
+    BundleTxn1 = ct_rpc:call(Src, blockchain_txn_bundle_v1, new, [[SignedTxn1, SignedTxn2]]),
     ct:pal("BundleTxn1: ~p", [BundleTxn1]),
     %% --------------------------------------------------------------
 
     %% --------------------------------------------------------------
     %% Bundle 2 contents
     %% Create third payment txn
-    Txn3 = ct_rpc:call(Payer, blockchain_txn_payment_v1, new, [PayerAddr, PayeeAddr, 1000, 3]),
-    SignedTxn3 = ct_rpc:call(Payer, blockchain_txn_payment_v1, sign, [Txn3, SigFun]),
+    Txn3 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 3]),
+    SignedTxn3 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn3, SigFun]),
     ct:pal("SignedTxn3: ~p", [SignedTxn3]),
 
     %% Create fourth payment txn
-    Txn4 = ct_rpc:call(Payer, blockchain_txn_payment_v1, new, [PayerAddr, PayeeAddr, 1000, 4]),
-    SignedTxn4 = ct_rpc:call(Payer, blockchain_txn_payment_v1, sign, [Txn4, SigFun]),
+    Txn4 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 4]),
+    SignedTxn4 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn4, SigFun]),
     ct:pal("SignedTxn4: ~p", [SignedTxn4]),
 
     %% Create bundle
-    BundleTxn2 = ct_rpc:call(Payer, blockchain_txn_bundle_v1, new, [[SignedTxn3, SignedTxn4]]),
+    BundleTxn2 = ct_rpc:call(Src, blockchain_txn_bundle_v1, new, [[SignedTxn3, SignedTxn4]]),
     ct:pal("BundleTxn2: ~p", [BundleTxn2]),
     %% --------------------------------------------------------------
 
 
     %% Do bundleception
-    BundleInBundleTxn = ct_rpc:call(Payer, blockchain_txn_bundle_v1, new, [[BundleTxn1, BundleTxn2]]),
+    BundleInBundleTxn = ct_rpc:call(Src, blockchain_txn_bundle_v1, new, [[BundleTxn1, BundleTxn2]]),
     ct:pal("BundleInBundleTxn: ~p", [BundleInBundleTxn]),
 
     %% Submit the bundle txn
@@ -645,8 +645,8 @@ bundleception_test(Config) ->
     ok = miner_ct_utils:wait_for_gte(height, Miners, 15),
 
     %% Balances should not have changed
-    5000 = miner_ct_utils:get_balance(Payer, PayerAddr),
-    5000 = miner_ct_utils:get_balance(Payee, PayeeAddr),
+    5000 = miner_ct_utils:get_balance(Src, SrcAddr),
+    5000 = miner_ct_utils:get_balance(Dst, DstAddr),
 
     ok.
 
