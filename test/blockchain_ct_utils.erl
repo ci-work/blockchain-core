@@ -18,6 +18,7 @@
          count/2,
          randname/1,
          get_config/2,
+         shuffle/1,
          random_n/2,
          init_per_testcase/2,
          init_per_suite/1,

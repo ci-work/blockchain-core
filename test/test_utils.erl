@@ -68,7 +68,11 @@ init_genesis_members({Priv, Pub}, InConsensus) ->
         end,
     MembersNeeded = 11 - length(Members0),
     Members1 = test_utils:generate_keys(MembersNeeded),
-    Members0 ++ Members1.
+    Members = Members0 ++ Members1,
+    %% TODO Shuffle. In order to discourage test-writers from relying on order.
+    %% i.e. current node should not be guaranteed to be first.
+    %% Can't do it until all reliance from existing test-cases is fixed.
+    Members.
 
 init_chain(Balance, Keys, InConsensus) when is_tuple(Keys), is_boolean(InConsensus) ->
     init_chain(Balance, Keys, InConsensus, #{});

@@ -60,7 +60,7 @@ init_per_testcase(TestCase, Cfg0) ->
         ok,
         _GenesisMembers,
         _GenesisBlock,
-        ConsensusMembers,
+        ConsensusMembers0,
         {master_key, MasterKey={_, _}}
     } =
         test_utils:init_chain(
@@ -73,6 +73,8 @@ init_per_testcase(TestCase, Cfg0) ->
                 ?vars_commit_delay => 1
             }
         ),
+    %% Shuffling to discourage reliance on order.
+    ConsensusMembers = blockchain_ct_utils:shuffle(ConsensusMembers0),
     N = length(ConsensusMembers),
     ?assert(N > 0, N),
     ?assertEqual(7, N),
@@ -104,7 +106,7 @@ basic_test(Cfg) ->
     Chain = ?config(chain, Cfg),
 
     %% Src needs a starting balance, so we pick one from the consensus group.
-    [{SrcAddr, {_, _, _}} | _] = ConsensusMembers,
+    [{SrcAddr, {_, _, SrcSigFun}} | _] = ConsensusMembers,
     SrcBalance = balance(Chain, SrcAddr),
     SrcNonce = nonce(Chain, SrcAddr),
 
@@ -122,14 +124,12 @@ basic_test(Cfg) ->
 
     %% First payment txn
     Txn1 = blockchain_txn_payment_v1:new(SrcAddr, DstAddr, AmountPerTxn, SrcNonce + 1),
-    {ok, _, SigFun, _} = blockchain_swarm:keys(),
-    SignedTxn1 = blockchain_txn_payment_v1:sign(Txn1, SigFun),
+    SignedTxn1 = blockchain_txn_payment_v1:sign(Txn1, SrcSigFun),
     ct:pal("SignedTxn1: ~p", [SignedTxn1]),
 
     %% Second payment txn
     Txn2 = blockchain_txn_payment_v1:new(SrcAddr, DstAddr, AmountPerTxn, SrcNonce + 2),
-    {ok, _, SigFun, _} = blockchain_swarm:keys(),
-    SignedTxn2 = blockchain_txn_payment_v1:sign(Txn2, SigFun),
+    SignedTxn2 = blockchain_txn_payment_v1:sign(Txn2, SrcSigFun),
     ct:pal("SignedTxn2: ~p", [SignedTxn2]),
 
     %% Bundle
