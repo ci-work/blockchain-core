@@ -103,10 +103,12 @@ basic_test(Cfg) ->
     ConsensusMembers = ?config(consensus_members, Cfg),
     Chain = ?config(chain, Cfg),
 
+    %% Payer needs a starting balance, so we pick one from the consensus group.
     [{PayerAddr, {_, _, _}} | _] = ConsensusMembers,
     PayerBalance = balance(Chain, PayerAddr),
     PayerNonce = nonce(Chain, PayerAddr),
 
+    %% Payee has no need for a starting balance, so we use an arbitrary address.
     PayeeAddr = gen_addr(), % dead-end address, since we'll never pay from it.
     PayeeBalance = balance(Chain, PayeeAddr),
 
