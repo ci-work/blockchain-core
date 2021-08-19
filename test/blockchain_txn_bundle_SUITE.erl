@@ -4,7 +4,6 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("kernel/include/inet.hrl").
 -include_lib("blockchain/include/blockchain_vars.hrl").
--include("miner_ct_macros.hrl").
 
 -export([
          init_per_suite/1,
@@ -29,7 +28,7 @@
          bundleception_test/1
         ]).
 
-%% common test callbacks
+%% Setup ----------------------------------------------------------------------
 
 all() -> [
           basic_test,
@@ -52,86 +51,92 @@ init_per_suite(Config) ->
 end_per_suite(Config) ->
     Config.
 
-init_per_testcase(_TestCase, Config0) ->
-    Config = miner_ct_utils:init_per_testcase(?MODULE, _TestCase, Config0),
-    try
-    Miners = ?config(miners, Config),
-    Addresses = ?config(addresses, Config),
-    Balance = 5000,
-    InitialCoinbaseTxns = [ blockchain_txn_coinbase_v1:new(Addr, Balance) || Addr <- Addresses],
-    CoinbaseDCTxns = [blockchain_txn_dc_coinbase_v1:new(Addr, Balance) || Addr <- Addresses],
-    NewConfig = [{rpc_timeout, timer:seconds(5)} | Config],
-    AddGwTxns = [blockchain_txn_gen_gateway_v1:new(Addr, Addr, h3:from_geo({37.780586, -122.469470}, 13), 0)
-                 || Addr <- Addresses],
+init_per_testcase(TestCase, Cfg0) ->
+    Cfg1 = blockchain_ct_utils:init_base_dir_config(?MODULE, TestCase, Cfg0),
+    Dir = ?config(base_dir, Cfg1),
+    StartingBalance = 5000,
+    {ok, Sup, Keys={_, _}, _Opts} = test_utils:init(Dir),
+    {
+        ok,
+        _GenesisMembers,
+        _GenesisBlock,
+        ConsensusMembers,
+        {master_key, MasterKey={_, _}}
+    } =
+        test_utils:init_chain(
+            StartingBalance,
+            Keys,
+            true,
+            #{
+                %% Setting vars_commit_delay to 1 is crucial,
+                %% otherwise var changes will not take effect.
+                ?vars_commit_delay => 1
+            }
+        ),
+    N = length(ConsensusMembers),
+    ?assert(N > 0, N),
+    ?assertEqual(7, N),
+    Chain = blockchain_worker:blockchain(), % TODO Return from init_chain instead
+    [
+        {sup, Sup},
+        {master_key, MasterKey},
+        {consensus_members, ConsensusMembers},
+        {chain, Chain}
+    |
+        Cfg1
+    ].
 
-    NumConsensusMembers= ?config(num_consensus_members, Config),
-    BlockTime = ?config(block_time, Config),
-    %% Don't want an election to happen, messes up checking the balances later
-    Interval = 100,
-    BatchSize = ?config(batch_size, Config),
-    Curve = ?config(dkg_curve, Config),
+end_per_testcase(_TestCase, Cfg) ->
+    Sup = ?config(sup, Cfg),
+    case erlang:is_process_alive(Sup) of
+        true ->
+            true = erlang:exit(Sup, normal),
+            ok = test_utils:wait_until(fun() -> false =:= erlang:is_process_alive(Sup) end);
+        false ->
+            ok
+    end,
+    ok.
 
-    Keys = libp2p_crypto:generate_keys(ecc_compact),
+%% Cases ----------------------------------------------------------------------
 
-    InitialVars = miner_ct_utils:make_vars(Keys, #{?block_time => BlockTime,
-                                                   ?election_interval => Interval,
-                                                   ?num_consensus_members => NumConsensusMembers,
-                                                   ?batch_size => BatchSize,
-                                                   ?dkg_curve => Curve}),
-
-    {ok, DKGCompletedNodes} = miner_ct_utils:initial_dkg(Miners, InitialVars ++ InitialCoinbaseTxns ++ CoinbaseDCTxns ++ AddGwTxns,
-                                    Addresses, NumConsensusMembers, Curve),
-
-    %% integrate genesis block
-    _GenesisLoadResults = miner_ct_utils:integrate_genesis_block(hd(DKGCompletedNodes), Miners -- DKGCompletedNodes),
-
-    %% Get both consensus and non consensus miners
-    {ConsensusMiners, NonConsensusMiners} = miner_ct_utils:miners_by_consensus_state(Miners),
+basic_test(Cfg) ->
+    ConsensusMembers = ?config(consensus_members, Cfg),
+    Chain = ?config(chain, Cfg),
 
     [
-        {consensus_miners, ConsensusMiners},
-        {non_consensus_miners, NonConsensusMiners}
-        | NewConfig]
-    catch
-        What:Why ->
-            end_per_testcase(_TestCase, Config),
-            erlang:What(Why)
-    end.
+        {PayerAddr, {_, _, _}},
+        {PayeeAddr, {_, _, _}}
+    |
+        _
+    ] = ConsensusMembers,
 
-end_per_testcase(_TestCase, Config) ->
-    miner_ct_utils:end_per_testcase(_TestCase, Config).
-
-basic_test(Config) ->
-    Miners = ?config(miners, Config),
-    [Payer, Payee | _Tail] = Miners,
-    PayerAddr = ct_rpc:call(Payer, blockchain_swarm, pubkey_bin, []),
-    PayeeAddr = ct_rpc:call(Payee, blockchain_swarm, pubkey_bin, []),
-
-    %% check initial balances
-    5000 = miner_ct_utils:get_balance(Payer, PayerAddr),
-    5000 = miner_ct_utils:get_balance(Payee, PayerAddr),
+    %% assert initial balances
+    ?assertEqual(5000, balance(Chain, PayerAddr)),
+    ?assertEqual(5000, balance(Chain, PayerAddr)),
 
     %% Create first payment txn
-    Txn1 = ct_rpc:call(Payer, blockchain_txn_payment_v1, new, [PayerAddr, PayeeAddr, 1000, 1]),
-    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Payer, blockchain_swarm, keys, []),
-    SignedTxn1 = ct_rpc:call(Payer, blockchain_txn_payment_v1, sign, [Txn1, SigFun]),
-    ct:pal("SignedTxn1: ~p", [SignedTxn1]),
-    %% Create second payment txn
-    Txn2 = ct_rpc:call(Payer, blockchain_txn_payment_v1, new, [PayerAddr, PayeeAddr, 1000, 2]),
-    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Payer, blockchain_swarm, keys, []),
-    SignedTxn2 = ct_rpc:call(Payer, blockchain_txn_payment_v1, sign, [Txn2, SigFun]),
-    ct:pal("SignedTxn2: ~p", [SignedTxn2]),
-    %% Create bundle
-    BundleTxn = ct_rpc:call(Payer, blockchain_txn_bundle_v1, new, [[SignedTxn1, SignedTxn2]]),
-    ct:pal("BundleTxn: ~p", [BundleTxn]),
-    %% Submit the bundle txn
-    miner_ct_utils:submit_txn(BundleTxn, Miners),
-    %% wait till height is 15, ideally should wait till the payment actually occurs
-    %% it should be plenty fast regardless
-    ok = miner_ct_utils:wait_for_gte(height, Miners, 15),
+    Txn1 = blockchain_txn_payment_v1:new(PayerAddr, PayeeAddr, 1000, 1),
 
-    3000 = miner_ct_utils:get_balance(Payer, PayerAddr),
-    7000 = miner_ct_utils:get_balance(Payee, PayeeAddr),
+    {ok, _Pubkey, SigFun, _ECDHFun} = blockchain_swarm:keys(),
+
+    SignedTxn1 = blockchain_txn_payment_v1:sign(Txn1, SigFun),
+    ct:pal("SignedTxn1: ~p", [SignedTxn1]),
+
+    %% Create second payment txn
+    Txn2 = blockchain_txn_payment_v1:new(PayerAddr, PayeeAddr, 1000, 2),
+    {ok, _Pubkey, SigFun, _ECDHFun} = blockchain_swarm:keys(),
+    SignedTxn2 = blockchain_txn_payment_v1:sign(Txn2, SigFun),
+    ct:pal("SignedTxn2: ~p", [SignedTxn2]),
+
+    %% Create bundle
+    BundleTxn = blockchain_txn_bundle_v1:new([SignedTxn1, SignedTxn2]),
+    ct:pal("BundleTxn: ~p", [BundleTxn]),
+
+    %% Add the bundle txn
+    ok = block_add(Chain, ConsensusMembers, BundleTxn),
+
+    ?assertEqual(3000, balance(Chain, PayerAddr)),
+    ?assertEqual(7000, balance(Chain, PayeeAddr)),
 
     ok.
 
@@ -641,10 +646,27 @@ bundleception_test(Config) ->
 
     ok.
 
-%% ------------------------------------------------------------------
-%% Local Helper functions
-%% ------------------------------------------------------------------
+%% Helpers --------------------------------------------------------------------
 
+balance(Chain, <<Addr/binary>>) ->
+    Ledger = blockchain:ledger(Chain),
+    case blockchain_ledger_v1:find_entry(Addr, Ledger) of
+        {error, address_entry_not_found} ->
+            0;
+        {ok, Entry} ->
+            blockchain_ledger_entry_v1:balance(Entry)
+    end.
 
-
-
+-spec block_add(blockchain:blockchain(), [{_, {_, _, _}}], _) ->
+    ok | {error, _}.
+block_add(Chain, ConsensusMembers, Txn) ->
+    case test_utils:create_block(ConsensusMembers, [Txn]) of
+        {ok, Block} ->
+            {ok, Height0} = blockchain:height(Chain),
+            ok = blockchain:add_block(Block, Chain),
+            {ok, Height1} = blockchain:height(Chain),
+            ?assertEqual(1 + Height0, Height1),
+            ok;
+        {error, _}=Err ->
+            Err
+    end.
