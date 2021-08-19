@@ -294,48 +294,45 @@ invalid_successive_test(Cfg) ->
 
     ok.
 
-single_payer_test(Config) ->
+single_payer_test(Cfg) ->
     %% Test a bundled payment from single payer
-    %% A -> B 2000
-    %% A -> C 3000
-    Miners = ?config(miners, Config),
-    [MinerA, MinerB, MinerC | _Tail] = Miners,
-    MinerAPubkeyBin = ct_rpc:call(MinerA, blockchain_swarm, pubkey_bin, []),
-    MinerBPubkeyBin = ct_rpc:call(MinerB, blockchain_swarm, pubkey_bin, []),
-    MinerCPubkeyBin = ct_rpc:call(MinerC, blockchain_swarm, pubkey_bin, []),
+    %% A -> B
+    %% A -> C
+    ConsensusMembers = ?config(consensus_members, Cfg),
+    Chain = ?config(chain, Cfg),
 
-    %% check initial balances
-    5000 = miner_ct_utils:get_balance(MinerA, MinerAPubkeyBin),
-    5000 = miner_ct_utils:get_balance(MinerB, MinerBPubkeyBin),
-    5000 = miner_ct_utils:get_balance(MinerC, MinerCPubkeyBin),
+    %% A needs a starting balance, so we pick one from the consensus group.
+    [{A_Addr, {_, _, A_SigFun}} | _] = ConsensusMembers,
+    A_Balance = balance(Chain, A_Addr),
+    A_Nonce = nonce(Chain, A_Addr),
 
-    %% Create first payment txn from A -> B
-    TxnAToB = ct_rpc:call(MinerA, blockchain_txn_payment_v1, new, [MinerAPubkeyBin, MinerBPubkeyBin, 2000, 1]),
-    {ok, _PubkeyA, SigFunA, _ECDHFunA} = ct_rpc:call(MinerA, blockchain_swarm, keys, []),
-    SignedTxnAToB = ct_rpc:call(MinerA, blockchain_txn_payment_v1, sign, [TxnAToB, SigFunA]),
-    ct:pal("SignedTxnAToB: ~p", [SignedTxnAToB]),
+    %% B and C can be arbitrary, since they have no need for a starting balance
+    %% - all funds will originate from A.
+    {B_Addr, _} = gen_creds(),
+    B_Balance = balance(Chain, B_Addr),
+    B_Nonce = nonce(Chain, B_Addr),
 
-    %% Create second payment txn from B -> C
-    TxnAToC = ct_rpc:call(MinerA, blockchain_txn_payment_v1, new, [MinerAPubkeyBin, MinerCPubkeyBin, 3000, 2]),
-    {ok, _PubkeyA, SigFunA, _ECDHFunA} = ct_rpc:call(MinerA, blockchain_swarm, keys, []),
-    SignedTxnAToC = ct_rpc:call(MinerA, blockchain_txn_payment_v1, sign, [TxnAToC, SigFunA]),
-    ct:pal("SignedTxnAToC: ~p", [SignedTxnAToC]),
+    {C_Addr, _} = gen_creds(),
+    C_Balance = balance(Chain, C_Addr),
 
-    %% Create bundle with txns
-    BundleTxn = ct_rpc:call(MinerA, blockchain_txn_bundle_v1, new, [[SignedTxnAToB, SignedTxnAToC]]),
-    ct:pal("BundleTxn: ~p", [BundleTxn]),
+    %% Expected initial values:
+    ?assertEqual(   0, A_Nonce),
+    ?assertEqual(   0, B_Nonce),
+    ?assertEqual(5000, A_Balance),
+    ?assertEqual(   0, B_Balance),
+    ?assertEqual(   0, C_Balance),
 
-    %% Submit the bundle txn
-    miner_ct_utils:submit_txn(BundleTxn, Miners),
+    AmountAToB = 2000,
+    AmountAToC = 3000,
+    TxnAToB = pay_txn(A_Addr, B_Addr, AmountAToB, A_SigFun, A_Nonce + 1),
+    TxnAToC = pay_txn(A_Addr, C_Addr, AmountAToC, A_SigFun, A_Nonce + 2),
+    Txns = [TxnAToB, TxnAToC],
+    TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
-    %% wait till height is 15, ideally should wait till the payment actually occurs
-    %% it should be plenty fast regardless
-    ok = miner_ct_utils:wait_for_gte(height, Miners, 15),
-
-    %% Expectation is that the payments should go through
-    0 = miner_ct_utils:get_balance(MinerA, MinerAPubkeyBin),
-    7000 = miner_ct_utils:get_balance(MinerB, MinerBPubkeyBin),
-    8000 = miner_ct_utils:get_balance(MinerC, MinerCPubkeyBin),
+    ?assertMatch(ok, chain_commit(Chain, ConsensusMembers, TxnBundle)),
+    ?assertEqual(A_Balance - AmountAToB - AmountAToC, balance(Chain, A_Addr)),
+    ?assertEqual(B_Balance + AmountAToB             , balance(Chain, B_Addr)),
+    ?assertEqual(C_Balance + AmountAToC             , balance(Chain, C_Addr)),
 
     ok.
 
