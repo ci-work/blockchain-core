@@ -166,45 +166,44 @@ negative_test(Cfg) ->
 
     ok.
 
-double_spend_test(Config) ->
-    Miners = ?config(miners, Config),
-    [Src, Dst, Other | _Tail] = Miners,
-    SrcAddr = ct_rpc:call(Src, blockchain_swarm, pubkey_bin, []),
-    DstAddr = ct_rpc:call(Dst, blockchain_swarm, pubkey_bin, []),
-    OtherAddr = ct_rpc:call(Other, blockchain_swarm, pubkey_bin, []),
+double_spend_test(Cfg) ->
+    ConsensusMembers = ?config(consensus_members, Cfg),
+    Chain = ?config(chain, Cfg),
 
-    %% check initial balances
-    5000 = miner_ct_utils:get_balance(Src, SrcAddr),
-    5000 = miner_ct_utils:get_balance(Dst, DstAddr),
-    5000 = miner_ct_utils:get_balance(Other, OtherAddr),
+    %% Src needs a starting balance, so we pick one from the consensus group.
+    [{SrcAddr, {_, _, SrcSigFun}} | _] = ConsensusMembers,
+    SrcBalance = balance(Chain, SrcAddr),
+    SrcNonce = nonce(Chain, SrcAddr) + 1,
 
-    %% Create first payment txn
-    Txn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 1]),
-    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Src, blockchain_swarm, keys, []),
-    SignedTxn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn1, SigFun]),
-    ct:pal("SignedTxn1: ~p", [SignedTxn1]),
+    %% A destination can be arbitrary, since it has no need for a starting balance.
+    %% A destination can be dead-end (no priv key), since we'll never pay from it.
+    Dst1Addr = gen_addr(),
+    Dst2Addr = gen_addr(),
+    Dst1Balance = balance(Chain, Dst1Addr),
+    Dst2Balance = balance(Chain, Dst2Addr),
 
-    %% Create second payment txn, where payer is trying to double spend (same nonce).
-    Txn2 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, OtherAddr, 1000, 1]),
-    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Src, blockchain_swarm, keys, []),
-    SignedTxn2 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn2, SigFun]),
-    ct:pal("SignedTxn2: ~p", [SignedTxn2]),
+    %% Expected initial values:
+    ?assertEqual(1, SrcNonce),
+    ?assertEqual(5000, SrcBalance),
+    ?assertEqual(0, Dst1Balance),
+    ?assertEqual(0, Dst2Balance),
 
-    %% Create bundle with txns reversed, ideally making it invalid
-    BundleTxn = ct_rpc:call(Src, blockchain_txn_bundle_v1, new, [[SignedTxn1, SignedTxn2]]),
-    ct:pal("BundleTxn: ~p", [BundleTxn]),
+    AmountPerTxn = 1000,
+    %% good txn: first spend
+    Txn1 = pay_txn(SrcAddr, Dst1Addr, AmountPerTxn, SrcSigFun, SrcNonce),
+    %% bad txn: double-spend = same nonce, diff dst
+    Txn2 = pay_txn(SrcAddr, Dst2Addr, AmountPerTxn, SrcSigFun, SrcNonce),
+    TxnBundle = blockchain_txn_bundle_v1:new([Txn1, Txn2]),
 
-    %% Submit the bundle txn
-    miner_ct_utils:submit_txn(BundleTxn, Miners),
+    ?assertMatch(
+        {error, {invalid_txns, [{_, invalid_bundled_txns}]}},
+        chain_commit(Chain, ConsensusMembers, TxnBundle)
+    ),
 
-    %% wait till height is 15, ideally should wait till the payment actually occurs
-    %% it should be plenty fast regardless
-    ok = miner_ct_utils:wait_for_gte(height, Miners, 15),
-
-    %% the balances should not have changed since the bundle was invalid
-    5000 = miner_ct_utils:get_balance(Src, SrcAddr),
-    5000 = miner_ct_utils:get_balance(Dst, DstAddr),
-    5000 = miner_ct_utils:get_balance(Other, OtherAddr),
+    %% All balances remain, since all txns were rejected, not just the bad one.
+    ?assertEqual(SrcBalance, balance(Chain, SrcAddr)),
+    ?assertEqual(Dst1Balance, balance(Chain, Dst1Addr)),
+    ?assertEqual(Dst2Balance, balance(Chain, Dst2Addr)),
 
     ok.
 
