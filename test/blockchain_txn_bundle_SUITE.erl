@@ -120,25 +120,13 @@ basic_test(Cfg) ->
     ?assertEqual(0, DstBalance),
 
     AmountPerTxn = 1000,
-    AmountTotal = 2 * AmountPerTxn,
+    Txn1 = pay_txn(SrcAddr, DstAddr, AmountPerTxn, SrcSigFun, SrcNonce + 1),
+    Txn2 = pay_txn(SrcAddr, DstAddr, AmountPerTxn, SrcSigFun, SrcNonce + 2),
+    Txns = [Txn1, Txn2],
+    TxnBundle = blockchain_txn_bundle_v1:new(Txns),
+    ok = chain_commit(Chain, ConsensusMembers, TxnBundle),
 
-    %% First payment txn
-    Txn1 = blockchain_txn_payment_v1:new(SrcAddr, DstAddr, AmountPerTxn, SrcNonce + 1),
-    SignedTxn1 = blockchain_txn_payment_v1:sign(Txn1, SrcSigFun),
-    ct:pal("SignedTxn1: ~p", [SignedTxn1]),
-
-    %% Second payment txn
-    Txn2 = blockchain_txn_payment_v1:new(SrcAddr, DstAddr, AmountPerTxn, SrcNonce + 2),
-    SignedTxn2 = blockchain_txn_payment_v1:sign(Txn2, SrcSigFun),
-    ct:pal("SignedTxn2: ~p", [SignedTxn2]),
-
-    %% Bundle
-    BundleTxn = blockchain_txn_bundle_v1:new([SignedTxn1, SignedTxn2]),
-    ct:pal("BundleTxn: ~p", [BundleTxn]),
-
-    %% Commit bundle txn
-    ok = chain_commit(Chain, ConsensusMembers, BundleTxn),
-
+    AmountTotal = length(Txns) * AmountPerTxn,
     ?assertEqual(SrcBalance - AmountTotal, balance(Chain, SrcAddr)),
     ?assertEqual(DstBalance + AmountTotal, balance(Chain, DstAddr)),
 
@@ -651,6 +639,10 @@ bundleception_test(Config) ->
     ok.
 
 %% Helpers --------------------------------------------------------------------
+
+pay_txn(Src, Dst, Amount, SrcSigFun, Nonce) ->
+    Txn = blockchain_txn_payment_v1:new(Src, Dst, Amount, Nonce),
+    blockchain_txn_payment_v1:sign(Txn, SrcSigFun).
 
 -spec gen_addr() -> binary().
 gen_addr() ->
