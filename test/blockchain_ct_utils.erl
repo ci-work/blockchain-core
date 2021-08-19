@@ -169,8 +169,8 @@ get_config(Arg, Default) ->
 random_n(N, List) ->
     lists:sublist(shuffle(List), N).
 
-shuffle(List) ->
-    [x || {_,x} <- lists:sort([{rand:uniform(), N} || N <- List])].
+shuffle(Xs) ->
+    [X || {_, X} <- lists:sort([{rand:uniform(), X} || X <- Xs])].
 
 init_per_suite(Config) ->
     application:ensure_all_started(ranch),
