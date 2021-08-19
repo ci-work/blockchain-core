@@ -103,43 +103,42 @@ basic_test(Cfg) ->
     ConsensusMembers = ?config(consensus_members, Cfg),
     Chain = ?config(chain, Cfg),
 
-    [
-        {PayerAddr, {_, _, _}},
-        {PayeeAddr, {_, _, _}}
-    |
-        _
-    ] = ConsensusMembers,
-
-    %% assert initial balances
-    ?assertEqual(5000, balance(Chain, PayerAddr)),
-    ?assertEqual(5000, balance(Chain, PayerAddr)),
-
+    [{PayerAddr, {_, _, _}} | _] = ConsensusMembers,
+    PayerBalance = balance(Chain, PayerAddr),
     PayerNonce = nonce(Chain, PayerAddr),
+
+    PayeeAddr = gen_addr(), % dead-end address, since we'll never pay from it.
+    PayeeBalance = balance(Chain, PayeeAddr),
+
+    %% Expected initial values:
     ?assertEqual(0, PayerNonce),
+    ?assertEqual(5000, PayerBalance),
+    ?assertEqual(0, PayeeBalance),
 
-    %% Create first payment txn
-    Txn1 = blockchain_txn_payment_v1:new(PayerAddr, PayeeAddr, 1000, PayerNonce + 1),
+    AmountPerTxn = 1000,
+    AmountTotal = 2 * AmountPerTxn,
 
-    {ok, _Pubkey, SigFun, _ECDHFun} = blockchain_swarm:keys(),
-
+    %% First payment txn
+    Txn1 = blockchain_txn_payment_v1:new(PayerAddr, PayeeAddr, AmountPerTxn, PayerNonce + 1),
+    {ok, _, SigFun, _} = blockchain_swarm:keys(),
     SignedTxn1 = blockchain_txn_payment_v1:sign(Txn1, SigFun),
     ct:pal("SignedTxn1: ~p", [SignedTxn1]),
 
-    %% Create second payment txn
-    Txn2 = blockchain_txn_payment_v1:new(PayerAddr, PayeeAddr, 1000, PayerNonce + 2),
-    {ok, _Pubkey, SigFun, _ECDHFun} = blockchain_swarm:keys(),
+    %% Second payment txn
+    Txn2 = blockchain_txn_payment_v1:new(PayerAddr, PayeeAddr, AmountPerTxn, PayerNonce + 2),
+    {ok, _, SigFun, _} = blockchain_swarm:keys(),
     SignedTxn2 = blockchain_txn_payment_v1:sign(Txn2, SigFun),
     ct:pal("SignedTxn2: ~p", [SignedTxn2]),
 
-    %% Create bundle
+    %% Bundle
     BundleTxn = blockchain_txn_bundle_v1:new([SignedTxn1, SignedTxn2]),
     ct:pal("BundleTxn: ~p", [BundleTxn]),
 
-    %% Add the bundle txn
-    ok = block_add(Chain, ConsensusMembers, BundleTxn),
+    %% Commit bundle txn
+    ok = chain_commit(Chain, ConsensusMembers, BundleTxn),
 
-    ?assertEqual(3000, balance(Chain, PayerAddr)),
-    ?assertEqual(7000, balance(Chain, PayeeAddr)),
+    ?assertEqual(PayerBalance - AmountTotal, balance(Chain, PayerAddr)),
+    ?assertEqual(PayeeBalance + AmountTotal, balance(Chain, PayeeAddr)),
 
     ok.
 
@@ -651,6 +650,11 @@ bundleception_test(Config) ->
 
 %% Helpers --------------------------------------------------------------------
 
+-spec gen_addr() -> binary().
+gen_addr() ->
+    #{public := Pub} = libp2p_crypto:generate_keys(ecc_compact),
+    libp2p_crypto:pubkey_to_bin(Pub).
+
 balance(Chain, <<Addr/binary>>) ->
     Ledger = blockchain:ledger(Chain),
     case blockchain_ledger_v1:find_entry(Addr, Ledger) of
@@ -660,9 +664,9 @@ balance(Chain, <<Addr/binary>>) ->
             blockchain_ledger_entry_v1:balance(Entry)
     end.
 
--spec block_add(blockchain:blockchain(), [{_, {_, _, _}}], _) ->
+-spec chain_commit(blockchain:blockchain(), [{_, {_, _, _}}], _) ->
     ok | {error, _}.
-block_add(Chain, ConsensusMembers, Txn) ->
+chain_commit(Chain, ConsensusMembers, Txn) ->
     case test_utils:create_block(ConsensusMembers, [Txn]) of
         {ok, Block} ->
             {ok, Height0} = blockchain:height(Chain),
