@@ -124,7 +124,7 @@ basic_test(Cfg) ->
     Txn2 = pay_txn(SrcAddr, DstAddr, AmountPerTxn, SrcSigFun, SrcNonce + 2),
     Txns = [Txn1, Txn2],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
-    ok = chain_commit(Chain, ConsensusMembers, TxnBundle),
+    ?assertMatch(ok, chain_commit(Chain, ConsensusMembers, TxnBundle)),
 
     AmountTotal = length(Txns) * AmountPerTxn,
     ?assertEqual(SrcBalance - AmountTotal, balance(Chain, SrcAddr)),
