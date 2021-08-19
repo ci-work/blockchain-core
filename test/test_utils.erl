@@ -22,6 +22,7 @@
 
 -define(BASE_TMP_DIR, "./_build/test/tmp").
 -define(BASE_TMP_DIR_TEMPLATE, "XXXXXXXXXX").
+
 init(BaseDir) ->
     #{public := PubKey, secret := PrivKey} = libp2p_crypto:generate_keys(ecc_compact),
     init(BaseDir, {PrivKey, PubKey}).
@@ -47,21 +48,27 @@ init_chain(Balance, {_PrivKey, _PubKey}=Keys, InConsensus, ExtraVars) ->
     GenesisMembers = init_genesis_members(Keys, InConsensus),
     init_chain(Balance, GenesisMembers, ExtraVars).
 
--spec init_genesis_members({P, S}, boolean()) -> [{binary(), {P, S}}] when
-    P :: libp2p_crypto:pubkey(),
-    S :: libp2p_crypto:privkey().
-init_genesis_members({PrivKey, PubKey}, InConsensus) ->
+-spec init_genesis_members({Pub, Priv}, boolean()) ->
+    [{Addr :: binary(), {Pub, Priv, Sign}}]
+    when
+        Pub  :: libp2p_crypto:pubkey(),
+        Priv :: libp2p_crypto:privkey(),
+        Sign :: fun((binary()) -> binary()).
+init_genesis_members({Priv, Pub}, InConsensus) ->
     % Generate fake blockchains (just the keys)
-    case InConsensus of
-        true ->
-            RandomKeys = test_utils:generate_keys(10),
-            Address = blockchain_swarm:pubkey_bin(),
-            [
-             {Address, {PubKey, PrivKey, libp2p_crypto:mk_sig_fun(PrivKey)}}
-            ] ++ RandomKeys;
-        false ->
-            test_utils:generate_keys(11)
-    end.
+    Members0 =
+        case InConsensus of
+            true ->
+                Addr = libp2p_crypto:pubkey_to_bin(Pub),
+                Sign = libp2p_crypto:mk_sig_fun(Priv),
+                ?assertEqual(Addr, blockchain_swarm:pubkey_bin()),
+                [{Addr, {Pub, Priv, Sign}}];
+            false ->
+                []
+        end,
+    MembersNeeded = 11 - length(Members0),
+    Members1 = test_utils:generate_keys(MembersNeeded),
+    Members0 ++ Members1.
 
 init_chain(Balance, Keys, InConsensus) when is_tuple(Keys), is_boolean(InConsensus) ->
     init_chain(Balance, Keys, InConsensus, #{});
