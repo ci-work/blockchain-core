@@ -114,8 +114,11 @@ basic_test(Cfg) ->
     ?assertEqual(5000, balance(Chain, PayerAddr)),
     ?assertEqual(5000, balance(Chain, PayerAddr)),
 
+    PayerNonce = nonce(Chain, PayerAddr),
+    ?assertEqual(0, PayerNonce),
+
     %% Create first payment txn
-    Txn1 = blockchain_txn_payment_v1:new(PayerAddr, PayeeAddr, 1000, 1),
+    Txn1 = blockchain_txn_payment_v1:new(PayerAddr, PayeeAddr, 1000, PayerNonce + 1),
 
     {ok, _Pubkey, SigFun, _ECDHFun} = blockchain_swarm:keys(),
 
@@ -123,7 +126,7 @@ basic_test(Cfg) ->
     ct:pal("SignedTxn1: ~p", [SignedTxn1]),
 
     %% Create second payment txn
-    Txn2 = blockchain_txn_payment_v1:new(PayerAddr, PayeeAddr, 1000, 2),
+    Txn2 = blockchain_txn_payment_v1:new(PayerAddr, PayeeAddr, 1000, PayerNonce + 2),
     {ok, _Pubkey, SigFun, _ECDHFun} = blockchain_swarm:keys(),
     SignedTxn2 = blockchain_txn_payment_v1:sign(Txn2, SigFun),
     ct:pal("SignedTxn2: ~p", [SignedTxn2]),
@@ -669,4 +672,14 @@ block_add(Chain, ConsensusMembers, Txn) ->
             ok;
         {error, _}=Err ->
             Err
+    end.
+
+-spec nonce(blockchain:blockchain(), binary()) -> integer().
+nonce(Chain, Addr) ->
+    Ledger = blockchain:ledger(Chain),
+    case blockchain_ledger_v1:find_entry(Addr, Ledger) of
+        {error, address_entry_not_found} ->
+            0;
+        {ok, Entry} ->
+            blockchain_ledger_entry_v1:nonce(Entry)
     end.
