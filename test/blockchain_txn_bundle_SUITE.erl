@@ -106,29 +106,29 @@ basic_test(Cfg) ->
     Chain = ?config(chain, Cfg),
 
     %% Src needs a starting balance, so we pick one from the consensus group.
-    [{SrcAddr, {_, _, SrcSigFun}} | _] = ConsensusMembers,
-    SrcBalance = balance(Chain, SrcAddr),
-    SrcNonce = nonce(Chain, SrcAddr),
-
     %% Dst has no need for a starting balance, so we use an arbitrary address.
-    DstAddr = gen_addr(), % dead-end address, since we'll never pay from it.
-    DstBalance = balance(Chain, DstAddr),
+    {Src, _} = user_pick_from_cg(ConsensusMembers),
+    Dst = user_new(),
 
-    %% Expected initial values:
-    ?assertEqual(0, SrcNonce),
-    ?assertEqual(5000, SrcBalance),
-    ?assertEqual(0, DstBalance),
+    SrcBalance0 = user_balance(Chain, Src),
+    DstBalance0 = user_balance(Chain, Dst),
+
+    %% Expected initial balances:
+    ?assertEqual(5000, SrcBalance0),
+    ?assertEqual(   0, DstBalance0),
 
     AmountPerTxn = 1000,
-    Txn1 = pay_txn(SrcAddr, DstAddr, AmountPerTxn, SrcSigFun, SrcNonce + 1),
-    Txn2 = pay_txn(SrcAddr, DstAddr, AmountPerTxn, SrcSigFun, SrcNonce + 2),
-    Txns = [Txn1, Txn2],
+    Txns =
+        [
+            user_pay(Src, Dst, AmountPerTxn, 1),
+            user_pay(Src, Dst, AmountPerTxn, 2)
+        ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
     ?assertMatch(ok, chain_commit(Chain, ConsensusMembers, TxnBundle)),
 
     AmountTotal = length(Txns) * AmountPerTxn,
-    ?assertEqual(SrcBalance - AmountTotal, balance(Chain, SrcAddr)),
-    ?assertEqual(DstBalance + AmountTotal, balance(Chain, DstAddr)),
+    ?assertEqual(SrcBalance0 - AmountTotal, user_balance(Chain, Src)),
+    ?assertEqual(DstBalance0 + AmountTotal, user_balance(Chain, Dst)),
 
     ok.
 
@@ -137,32 +137,34 @@ negative_test(Cfg) ->
     Chain = ?config(chain, Cfg),
 
     %% Src needs a starting balance, so we pick one from the consensus group.
-    [{SrcAddr, {_, _, SrcSigFun}} | _] = ConsensusMembers,
-    SrcBalance = balance(Chain, SrcAddr),
-    SrcNonce = nonce(Chain, SrcAddr),
+    {Src, _} = user_pick_from_cg(ConsensusMembers),
+    SrcBalance0 = user_balance(Chain, Src),
 
     %% Dst has no need for a starting balance, so we use an arbitrary address.
-    DstAddr = gen_addr(), % dead-end address, since we'll never pay from it.
-    DstBalance = balance(Chain, DstAddr),
+    Dst = user_new(),
+    DstBalance0 = user_balance(Chain, Dst),
 
-    %% Expected initial values:
-    ?assertEqual(0, SrcNonce),
-    ?assertEqual(5000, SrcBalance),
-    ?assertEqual(0, DstBalance),
+    %% Expected initial balances:
+    ?assertEqual(5000, SrcBalance0),
+    ?assertEqual(   0, DstBalance0),
 
     AmountPerTxn = 1000,
-    Txn1 = pay_txn(SrcAddr, DstAddr, AmountPerTxn, SrcSigFun, SrcNonce + 1),
-    Txn2 = pay_txn(SrcAddr, DstAddr, AmountPerTxn, SrcSigFun, SrcNonce + 2),
-    Txns = [Txn2, Txn1], % Reversed order, invalidating the bundle.
+    Txns =
+        %% Reversed order of nonces, invalidating the bundle:
+        [
+            user_pay(Src, Dst, AmountPerTxn, 2),
+            user_pay(Src, Dst, AmountPerTxn, 1)
+        ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
+
     ?assertMatch(
         {error, {invalid_txns, [{_, invalid_bundled_txns}]}},
         chain_commit(Chain, ConsensusMembers, TxnBundle)
     ),
 
     %% Balances should not have changed since the bundle was invalid:
-    ?assertEqual(SrcBalance, balance(Chain, SrcAddr)),
-    ?assertEqual(DstBalance, balance(Chain, DstAddr)),
+    ?assertEqual(SrcBalance0, user_balance(Chain, Src)),
+    ?assertEqual(DstBalance0, user_balance(Chain, Dst)),
 
     ok.
 
@@ -171,29 +173,32 @@ double_spend_test(Cfg) ->
     Chain = ?config(chain, Cfg),
 
     %% Src needs a starting balance, so we pick one from the consensus group.
-    [{SrcAddr, {_, _, SrcSigFun}} | _] = ConsensusMembers,
-    SrcBalance = balance(Chain, SrcAddr),
-    SrcNonce = nonce(Chain, SrcAddr) + 1,
+    {Src, _} = user_pick_from_cg(ConsensusMembers),
+    SrcBalance0 = user_balance(Chain, Src),
+    SrcNonce = 1,
 
     %% A destination can be arbitrary, since it has no need for a starting balance.
     %% A destination can be dead-end (no priv key), since we'll never pay from it.
-    Dst1Addr = gen_addr(),
-    Dst2Addr = gen_addr(),
-    Dst1Balance = balance(Chain, Dst1Addr),
-    Dst2Balance = balance(Chain, Dst2Addr),
+    Dst1 = user_new(),
+    Dst2 = user_new(),
+    Dst1Balance0 = user_balance(Chain, Dst1),
+    Dst2Balance0 = user_balance(Chain, Dst2),
 
-    %% Expected initial values:
-    ?assertEqual(1, SrcNonce),
-    ?assertEqual(5000, SrcBalance),
-    ?assertEqual(0, Dst1Balance),
-    ?assertEqual(0, Dst2Balance),
+    %% Expected initial balances:
+    ?assertEqual(5000, SrcBalance0),
+    ?assertEqual(   0, Dst1Balance0),
+    ?assertEqual(   0, Dst2Balance0),
 
     AmountPerTxn = 1000,
-    %% good txn: first spend
-    Txn1 = pay_txn(SrcAddr, Dst1Addr, AmountPerTxn, SrcSigFun, SrcNonce),
-    %% bad txn: double-spend = same nonce, diff dst
-    Txn2 = pay_txn(SrcAddr, Dst2Addr, AmountPerTxn, SrcSigFun, SrcNonce),
-    TxnBundle = blockchain_txn_bundle_v1:new([Txn1, Txn2]),
+    Txns =
+        [
+            %% good txn: first spend
+            user_pay(Src, Dst1, AmountPerTxn, SrcNonce),
+
+            %% bad txn: double-spend = same nonce, diff dst
+            user_pay(Src, Dst2, AmountPerTxn, SrcNonce)
+        ],
+    TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
     ?assertMatch(
         {error, {invalid_txns, [{_, invalid_bundled_txns}]}},
@@ -201,9 +206,9 @@ double_spend_test(Cfg) ->
     ),
 
     %% All balances remain, since all txns were rejected, not just the bad one.
-    ?assertEqual(SrcBalance, balance(Chain, SrcAddr)),
-    ?assertEqual(Dst1Balance, balance(Chain, Dst1Addr)),
-    ?assertEqual(Dst2Balance, balance(Chain, Dst2Addr)),
+    ?assertEqual(SrcBalance0 , user_balance(Chain, Src)),
+    ?assertEqual(Dst1Balance0, user_balance(Chain, Dst1)),
+    ?assertEqual(Dst2Balance0, user_balance(Chain, Dst2)),
 
     ok.
 
@@ -215,37 +220,34 @@ successive_test(Cfg) ->
     Chain = ?config(chain, Cfg),
 
     %% A needs a starting balance, so we pick one from the consensus group.
-    [{A_Addr, {_, _, A_SigFun}} | _] = ConsensusMembers,
-    A_Balance = balance(Chain, A_Addr),
-    A_Nonce = nonce(Chain, A_Addr),
-
     %% B and C can be arbitrary, since they have no need for a starting balance
     %% - all funds will originate from A.
-    {B_Addr, B_SigFun} = gen_creds(),
-    B_Balance = balance(Chain, B_Addr),
-    B_Nonce = nonce(Chain, B_Addr),
+    {A, _} = user_pick_from_cg(ConsensusMembers),
+    B = user_new(),
+    C = user_new(),
 
-    {C_Addr, _} = gen_creds(),
-    C_Balance = balance(Chain, C_Addr),
+    A_Balance0 = user_balance(Chain, A),
+    B_Balance0 = user_balance(Chain, B),
+    C_Balance0 = user_balance(Chain, C),
 
-    %% Expected initial values:
-    ?assertEqual(   0, A_Nonce),
-    ?assertEqual(   0, B_Nonce),
-    ?assertEqual(5000, A_Balance),
-    ?assertEqual(   0, B_Balance),
-    ?assertEqual(   0, C_Balance),
+    %% Expected initial balances:
+    ?assertEqual(5000, A_Balance0),
+    ?assertEqual(   0, B_Balance0),
+    ?assertEqual(   0, C_Balance0),
 
-    AmountAToB = 5000,
-    AmountBToC = 1000,
-    TxnAToB = pay_txn(A_Addr, B_Addr, AmountAToB, A_SigFun, A_Nonce + 1),
-    TxnBToC = pay_txn(B_Addr, C_Addr, AmountBToC, B_SigFun, B_Nonce + 1),
-    Txns = [TxnAToB, TxnBToC],
+    AmountAToB = A_Balance0,
+    AmountBToC = AmountAToB - 1,
+    Txns =
+        [
+            user_pay(A, B, AmountAToB, 1),
+            user_pay(B, C, AmountBToC, 1)
+        ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
     ?assertMatch(ok, chain_commit(Chain, ConsensusMembers, TxnBundle)),
-    ?assertEqual(A_Balance - AmountAToB             , balance(Chain, A_Addr)),
-    ?assertEqual(B_Balance + AmountAToB - AmountBToC, balance(Chain, B_Addr)),
-    ?assertEqual(C_Balance + AmountBToC             , balance(Chain, C_Addr)),
+    ?assertEqual(A_Balance0 - AmountAToB             , user_balance(Chain, A)),
+    ?assertEqual(B_Balance0 + AmountAToB - AmountBToC, user_balance(Chain, B)),
+    ?assertEqual(C_Balance0 + AmountBToC             , user_balance(Chain, C)),
 
     ok.
 
@@ -257,40 +259,37 @@ invalid_successive_test(Cfg) ->
     Chain = ?config(chain, Cfg),
 
     %% A needs a starting balance, so we pick one from the consensus group.
-    [{A_Addr, {_, _, A_SigFun}} | _] = ConsensusMembers,
-    A_Balance = balance(Chain, A_Addr),
-    A_Nonce = nonce(Chain, A_Addr),
-
     %% B and C can be arbitrary, since they have no need for a starting balance
     %% - all funds will originate from A.
-    {B_Addr, B_SigFun} = gen_creds(),
-    B_Balance = balance(Chain, B_Addr),
-    B_Nonce = nonce(Chain, B_Addr),
+    {A, _} = user_pick_from_cg(ConsensusMembers),
+    B = user_new(),
+    C = user_new(),
 
-    {C_Addr, _} = gen_creds(),
-    C_Balance = balance(Chain, C_Addr),
+    A_Balance0 = user_balance(Chain, A),
+    B_Balance0 = user_balance(Chain, B),
+    C_Balance0 = user_balance(Chain, C),
 
-    %% Expected initial values:
-    ?assertEqual(   0, A_Nonce),
-    ?assertEqual(   0, B_Nonce),
-    ?assertEqual(5000, A_Balance),
-    ?assertEqual(   0, B_Balance),
-    ?assertEqual(   0, C_Balance),
+    %% Expected initial balances:
+    ?assertEqual(5000, A_Balance0),
+    ?assertEqual(   0, B_Balance0),
+    ?assertEqual(   0, C_Balance0),
 
-    AmountAToB = A_Balance,
-    AmountBToC = B_Balance + AmountAToB + 1, % over limit
-    TxnAToB = pay_txn(A_Addr, B_Addr, AmountAToB, A_SigFun, A_Nonce + 1),
-    TxnBToC = pay_txn(B_Addr, C_Addr, AmountBToC, B_SigFun, B_Nonce + 1),
-    Txns = [TxnAToB, TxnBToC],
+    AmountAToB = A_Balance0,
+    AmountBToC = B_Balance0 + AmountAToB + 1,  % overdraw attempt
+    Txns =
+        [
+            user_pay(A, B, AmountAToB, 1),
+            user_pay(B, C, AmountBToC, 1)
+        ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
     ?assertMatch(
         {error, {invalid_txns, [{_, invalid_bundled_txns}]}},
         chain_commit(Chain, ConsensusMembers, TxnBundle)
     ),
-    ?assertEqual(A_Balance, balance(Chain, A_Addr)),
-    ?assertEqual(B_Balance, balance(Chain, B_Addr)),
-    ?assertEqual(C_Balance, balance(Chain, C_Addr)),
+    ?assertEqual(A_Balance0, user_balance(Chain, A)),
+    ?assertEqual(B_Balance0, user_balance(Chain, B)),
+    ?assertEqual(C_Balance0, user_balance(Chain, C)),
 
     ok.
 
@@ -302,37 +301,34 @@ single_payer_test(Cfg) ->
     Chain = ?config(chain, Cfg),
 
     %% A needs a starting balance, so we pick one from the consensus group.
-    [{A_Addr, {_, _, A_SigFun}} | _] = ConsensusMembers,
-    A_Balance = balance(Chain, A_Addr),
-    A_Nonce = nonce(Chain, A_Addr),
-
     %% B and C can be arbitrary, since they have no need for a starting balance
     %% - all funds will originate from A.
-    {B_Addr, _} = gen_creds(),
-    B_Balance = balance(Chain, B_Addr),
-    B_Nonce = nonce(Chain, B_Addr),
+    {A, _} = user_pick_from_cg(ConsensusMembers),
+    B = user_new(),
+    C = user_new(),
 
-    {C_Addr, _} = gen_creds(),
-    C_Balance = balance(Chain, C_Addr),
+    A_Balance0 = user_balance(Chain, A),
+    B_Balance0 = user_balance(Chain, B),
+    C_Balance0 = user_balance(Chain, C),
 
     %% Expected initial values:
-    ?assertEqual(   0, A_Nonce),
-    ?assertEqual(   0, B_Nonce),
-    ?assertEqual(5000, A_Balance),
-    ?assertEqual(   0, B_Balance),
-    ?assertEqual(   0, C_Balance),
+    ?assertEqual(5000, A_Balance0),
+    ?assertEqual(   0, B_Balance0),
+    ?assertEqual(   0, C_Balance0),
 
     AmountAToB = 2000,
     AmountAToC = 3000,
-    TxnAToB = pay_txn(A_Addr, B_Addr, AmountAToB, A_SigFun, A_Nonce + 1),
-    TxnAToC = pay_txn(A_Addr, C_Addr, AmountAToC, A_SigFun, A_Nonce + 2),
-    Txns = [TxnAToB, TxnAToC],
+    Txns =
+        [
+            user_pay(A, B, AmountAToB, 1),
+            user_pay(A, C, AmountAToC, 2)
+        ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
     ?assertMatch(ok, chain_commit(Chain, ConsensusMembers, TxnBundle)),
-    ?assertEqual(A_Balance - AmountAToB - AmountAToC, balance(Chain, A_Addr)),
-    ?assertEqual(B_Balance + AmountAToB             , balance(Chain, B_Addr)),
-    ?assertEqual(C_Balance + AmountAToC             , balance(Chain, C_Addr)),
+    ?assertEqual(A_Balance0 - AmountAToB - AmountAToC, user_balance(Chain, A)),
+    ?assertEqual(B_Balance0 + AmountAToB             , user_balance(Chain, B)),
+    ?assertEqual(C_Balance0 + AmountAToC             , user_balance(Chain, C)),
 
     ok.
 
@@ -349,35 +345,34 @@ single_payer_invalid_test(Cfg) ->
     Chain = ?config(chain, Cfg),
 
     %% A needs a starting balance, so we pick one from the consensus group.
-    [{A_Addr, {_, _, A_SigFun}} | _] = ConsensusMembers,
-    A_Balance = balance(Chain, A_Addr),
-    A_Nonce = nonce(Chain, A_Addr),
-
     %% B and C can be arbitrary, since they have no need for a starting balance
     %% - all funds will originate from A.
-    {B_Addr, _} = gen_creds(),
-    B_Balance = balance(Chain, B_Addr),
-    B_Nonce = nonce(Chain, B_Addr),
+    {A, _} = user_pick_from_cg(ConsensusMembers),
+    B = user_new(),
+    C = user_new(),
 
-    {C_Addr, _} = gen_creds(),
-    C_Balance = balance(Chain, C_Addr),
+    A_Balance0 = user_balance(Chain, A),
+    B_Balance0 = user_balance(Chain, B),
+    C_Balance0 = user_balance(Chain, C),
 
     %% Expected initial values:
-    ?assertEqual(   0, A_Nonce),
-    ?assertEqual(   0, B_Nonce),
-    ?assertEqual(5000, A_Balance),
-    ?assertEqual(   0, B_Balance),
-    ?assertEqual(   0, C_Balance),
+    ?assertEqual(5000, A_Balance0),
+    ?assertEqual(   0, B_Balance0),
+    ?assertEqual(   0, C_Balance0),
 
     Overage = 1000,
     AmountAToB = 2000,
-    AmountAToC = (A_Balance - AmountAToB) + Overage,
+    AmountAToC = (A_Balance0 - AmountAToB) + Overage,
 
-    ?assert(A_Balance < (AmountAToB + AmountAToC)), % Sanity check
+    % Sanity checks
+    ?assert(A_Balance0 >= AmountAToB),
+    ?assert(A_Balance0 <  (AmountAToB + AmountAToC)),
 
-    TxnAToB = pay_txn(A_Addr, B_Addr, AmountAToB, A_SigFun, A_Nonce + 1),
-    TxnAToC = pay_txn(A_Addr, C_Addr, AmountAToC, A_SigFun, A_Nonce + 2),
-    Txns = [TxnAToB, TxnAToC],
+    Txns =
+        [
+            user_pay(A, B, AmountAToB, 1),
+            user_pay(A, C, AmountAToC, 2)
+        ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
     ?assertMatch(
@@ -387,9 +382,9 @@ single_payer_invalid_test(Cfg) ->
 
     %% Because of one invalid txn (A->C), the whole bundle was rejected, so
     %% nothing changed:
-    ?assertEqual(A_Balance, balance(Chain, A_Addr)),
-    ?assertEqual(B_Balance, balance(Chain, B_Addr)),
-    ?assertEqual(C_Balance, balance(Chain, C_Addr)),
+    ?assertEqual(A_Balance0, user_balance(Chain, A)),
+    ?assertEqual(B_Balance0, user_balance(Chain, B)),
+    ?assertEqual(C_Balance0, user_balance(Chain, C)),
 
     ok.
 
@@ -411,45 +406,40 @@ full_circle_test(Cfg) ->
     Chain = ?config(chain, Cfg),
 
     %% A needs a starting balance, so we pick one from the consensus group.
-    [{A_Addr, {_, _, A_SigFun}} | _] = ConsensusMembers,
-    A_Balance = balance(Chain, A_Addr),
-    A_Nonce = nonce(Chain, A_Addr),
-
     %% B and C can be arbitrary, since they have no need for a starting balance
     %% - all funds will originate from A.
-    {B_Addr, B_SigFun} = gen_creds(),
-    B_Balance = balance(Chain, B_Addr),
-    B_Nonce = nonce(Chain, B_Addr),
+    {A, _} = user_pick_from_cg(ConsensusMembers),
+    B = user_new(),
+    C = user_new(),
 
-    {C_Addr, C_SigFun} = gen_creds(),
-    C_Balance = balance(Chain, C_Addr),
-    C_Nonce = nonce(Chain, C_Addr),
+    A_Balance0 = user_balance(Chain, A),
+    B_Balance0 = user_balance(Chain, B),
+    C_Balance0 = user_balance(Chain, C),
 
     %% Expected initial values:
-    ?assertEqual(   0, A_Nonce),
-    ?assertEqual(   0, B_Nonce),
-    ?assertEqual(5000, A_Balance),
-    ?assertEqual(   0, B_Balance),
-    ?assertEqual(   0, C_Balance),
+    ?assertEqual(5000, A_Balance0),
+    ?assertEqual(   0, B_Balance0),
+    ?assertEqual(   0, C_Balance0),
 
-    AmountAToB = A_Balance,
-    AmountBToC = A_Balance + B_Balance,
-    AmountCToA = A_Balance + B_Balance + C_Balance,
+    AmountAToB = A_Balance0,
+    AmountBToC = A_Balance0 + B_Balance0,
+    AmountCToA = A_Balance0 + B_Balance0 + C_Balance0,
     BalanceExpectedA = AmountCToA,
     BalanceExpectedB = 0,
     BalanceExpectedC = 0,
 
-    TxnAToB = pay_txn(A_Addr, B_Addr, AmountAToB, A_SigFun, A_Nonce + 1),
-    TxnBToC = pay_txn(B_Addr, C_Addr, AmountBToC, B_SigFun, B_Nonce + 1),
-    TxnCToA = pay_txn(C_Addr, A_Addr, AmountCToA, C_SigFun, C_Nonce + 1),
-
-    Txns = [TxnAToB, TxnBToC, TxnCToA],
+    Txns =
+        [
+            user_pay(A, B, AmountAToB, 1),
+            user_pay(B, C, AmountBToC, 1),
+            user_pay(C, A, AmountCToA, 1)
+        ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
     ?assertMatch(ok, chain_commit(Chain, ConsensusMembers, TxnBundle)),
-    ?assertEqual(BalanceExpectedA, balance(Chain, A_Addr)),
-    ?assertEqual(BalanceExpectedB, balance(Chain, B_Addr)),
-    ?assertEqual(BalanceExpectedC, balance(Chain, C_Addr)),
+    ?assertEqual(BalanceExpectedA, user_balance(Chain, A)),
+    ?assertEqual(BalanceExpectedB, user_balance(Chain, B)),
+    ?assertEqual(BalanceExpectedC, user_balance(Chain, C)),
 
     ok.
 
@@ -642,23 +632,36 @@ bundleception_test(Config) ->
 
 %% Helpers --------------------------------------------------------------------
 
-pay_txn(Src, Dst, Amount, SrcSigFun, Nonce) ->
-    Txn = blockchain_txn_payment_v1:new(Src, Dst, Amount, Nonce),
-    blockchain_txn_payment_v1:sign(Txn, SrcSigFun).
+-type user() ::
+    {Addr :: binary(), SigFun :: fun((binary()) -> binary())}.
 
--spec gen_creds() -> {binary(), fun((binary()) -> binary())}.
-gen_creds() ->
+-type consensus_member() ::
+    {
+        Addr :: binary(),
+        {
+            Pub  :: libp2p_crypto:pubkey(),
+            Priv :: libp2p_crypto:privkey(),
+            Sign :: fun((binary()) -> binary())
+        }
+    }.
+
+-type consensus_group() ::
+    [consensus_member()].
+
+-spec user_new() -> user().
+user_new() ->
     #{public := Pub, secret := Priv} = libp2p_crypto:generate_keys(ecc_compact),
     Addr = libp2p_crypto:pubkey_to_bin(Pub),
     SigFun = libp2p_crypto:mk_sig_fun(Priv),
     {Addr, SigFun}.
 
--spec gen_addr() -> binary().
-gen_addr() ->
-    #{public := Pub} = libp2p_crypto:generate_keys(ecc_compact),
-    libp2p_crypto:pubkey_to_bin(Pub).
+-spec user_pick_from_cg(consensus_group()) -> {user(), consensus_group()}.
+user_pick_from_cg([{<<Addr/binary>>, {_, _, SigFun}} | ConsensusMembers]) ->
+    {{Addr, SigFun}, ConsensusMembers}.
 
-balance(Chain, <<Addr/binary>>) ->
+-spec user_balance(blockchain:blockchain(), user()) ->
+    non_neg_integer().
+user_balance(Chain, {<<Addr/binary>>, _}) ->
     Ledger = blockchain:ledger(Chain),
     case blockchain_ledger_v1:find_entry(Addr, Ledger) of
         {error, address_entry_not_found} ->
@@ -666,6 +669,12 @@ balance(Chain, <<Addr/binary>>) ->
         {ok, Entry} ->
             blockchain_ledger_entry_v1:balance(Entry)
     end.
+
+-spec user_pay(user(), user(), non_neg_integer(), non_neg_integer()) ->
+    Txn :: term(). % TODO Txn type
+user_pay({<<Src/binary>>, SrcSigFun}, {<<Dst/binary>>, _}, Amount, Nonce) ->
+    Txn = blockchain_txn_payment_v1:new(Src, Dst, Amount, Nonce),
+    blockchain_txn_payment_v1:sign(Txn, SrcSigFun).
 
 -spec chain_commit(blockchain:blockchain(), [{_, {_, _, _}}], _) ->
     ok | {error, _}.
@@ -679,14 +688,4 @@ chain_commit(Chain, ConsensusMembers, Txn) ->
             ok;
         {error, _}=Err ->
             Err
-    end.
-
--spec nonce(blockchain:blockchain(), binary()) -> integer().
-nonce(Chain, Addr) ->
-    Ledger = blockchain:ledger(Chain),
-    case blockchain_ledger_v1:find_entry(Addr, Ledger) of
-        {error, address_entry_not_found} ->
-            0;
-        {ok, Entry} ->
-            blockchain_ledger_entry_v1:nonce(Entry)
     end.
