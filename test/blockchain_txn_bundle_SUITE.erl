@@ -393,58 +393,63 @@ single_payer_invalid_test(Cfg) ->
 
     ok.
 
-full_circle_test(Config) ->
-    %% Test a successive valid bundle payment
-    %% A -> B -> C
-    %% A -> B 5000
-    %% B -> C 10000
-    Miners = ?config(miners, Config),
-    [MinerA, MinerB, MinerC | _Tail] = Miners,
-    MinerAPubkeyBin = ct_rpc:call(MinerA, blockchain_swarm, pubkey_bin, []),
-    MinerBPubkeyBin = ct_rpc:call(MinerB, blockchain_swarm, pubkey_bin, []),
-    MinerCPubkeyBin = ct_rpc:call(MinerC, blockchain_swarm, pubkey_bin, []),
+full_circle_test(Cfg) ->
+    %% Test a full-circle transfer of funds:
+    %% Given:
+    %%   A: NA
+    %%   B: NB
+    %%   C: NC
+    %% Attempt:
+    %%   A -(NA      )-> B
+    %%   B -(NA+NB   )-> C
+    %%   C -(NA+NB+NC)-> A
+    %% Expect:
+    %%   A: NA + NB + NC
+    %%   B: 0
+    %%   C: 0
+    ConsensusMembers = ?config(consensus_members, Cfg),
+    Chain = ?config(chain, Cfg),
 
-    %% check initial balances
-    5000 = miner_ct_utils:get_balance(MinerA, MinerAPubkeyBin),
-    5000 = miner_ct_utils:get_balance(MinerB, MinerBPubkeyBin),
-    5000 = miner_ct_utils:get_balance(MinerC, MinerCPubkeyBin),
+    %% A needs a starting balance, so we pick one from the consensus group.
+    [{A_Addr, {_, _, A_SigFun}} | _] = ConsensusMembers,
+    A_Balance = balance(Chain, A_Addr),
+    A_Nonce = nonce(Chain, A_Addr),
 
-    %% Create first payment txn from A -> B
-    TxnAToB = ct_rpc:call(MinerA, blockchain_txn_payment_v1, new, [MinerAPubkeyBin, MinerBPubkeyBin, 5000, 1]),
-    {ok, _PubkeyA, SigFunA, _ECDHFunA} = ct_rpc:call(MinerA, blockchain_swarm, keys, []),
-    SignedTxnAToB = ct_rpc:call(MinerA, blockchain_txn_payment_v1, sign, [TxnAToB, SigFunA]),
-    ct:pal("SignedTxnAToB: ~p", [SignedTxnAToB]),
+    %% B and C can be arbitrary, since they have no need for a starting balance
+    %% - all funds will originate from A.
+    {B_Addr, B_SigFun} = gen_creds(),
+    B_Balance = balance(Chain, B_Addr),
+    B_Nonce = nonce(Chain, B_Addr),
 
-    %% Create second payment txn from B -> C
-    TxnBToC = ct_rpc:call(MinerB, blockchain_txn_payment_v1, new, [MinerBPubkeyBin, MinerCPubkeyBin, 10000, 1]),
-    {ok, _PubkeyB, SigFunB, _ECDHFunB} = ct_rpc:call(MinerB, blockchain_swarm, keys, []),
-    SignedTxnBToC = ct_rpc:call(MinerB, blockchain_txn_payment_v1, sign, [TxnBToC, SigFunB]),
-    ct:pal("SignedTxnBToC: ~p", [SignedTxnBToC]),
+    {C_Addr, C_SigFun} = gen_creds(),
+    C_Balance = balance(Chain, C_Addr),
+    C_Nonce = nonce(Chain, C_Addr),
 
-    %% Create third payment txn from C -> A
-    TxnCToA = ct_rpc:call(MinerB, blockchain_txn_payment_v1, new, [MinerCPubkeyBin, MinerAPubkeyBin, 15000, 1]),
-    {ok, _PubkeyC, SigFunC, _ECDHFunC} = ct_rpc:call(MinerC, blockchain_swarm, keys, []),
-    SignedTxnCToA = ct_rpc:call(MinerC, blockchain_txn_payment_v1, sign, [TxnCToA, SigFunC]),
-    ct:pal("SignedTxnCToA: ~p", [SignedTxnCToA]),
+    %% Expected initial values:
+    ?assertEqual(   0, A_Nonce),
+    ?assertEqual(   0, B_Nonce),
+    ?assertEqual(5000, A_Balance),
+    ?assertEqual(   0, B_Balance),
+    ?assertEqual(   0, C_Balance),
 
-    %% Create bundle with txns
-    BundleTxn = ct_rpc:call(MinerA, blockchain_txn_bundle_v1, new, [[SignedTxnAToB,
-                                                                     SignedTxnBToC,
-                                                                     SignedTxnCToA
-                                                                    ]]),
-    ct:pal("BundleTxn: ~p", [BundleTxn]),
+    AmountAToB = A_Balance,
+    AmountBToC = A_Balance + B_Balance,
+    AmountCToA = A_Balance + B_Balance + C_Balance,
+    BalanceExpectedA = AmountCToA,
+    BalanceExpectedB = 0,
+    BalanceExpectedC = 0,
 
-    %% Submit the bundle txn
-    miner_ct_utils:submit_txn(BundleTxn, Miners),
+    TxnAToB = pay_txn(A_Addr, B_Addr, AmountAToB, A_SigFun, A_Nonce + 1),
+    TxnBToC = pay_txn(B_Addr, C_Addr, AmountBToC, B_SigFun, B_Nonce + 1),
+    TxnCToA = pay_txn(C_Addr, A_Addr, AmountCToA, C_SigFun, C_Nonce + 1),
 
-    %% wait till height is 15, ideally should wait till the payment actually occurs
-    %% it should be plenty fast regardless
-    ok = miner_ct_utils:wait_for_gte(height, Miners, 15),
+    Txns = [TxnAToB, TxnBToC, TxnCToA],
+    TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
-    %% Expectation is that the full payment circle should complete
-    15000 = miner_ct_utils:get_balance(MinerA, MinerAPubkeyBin),
-    0 = miner_ct_utils:get_balance(MinerB, MinerBPubkeyBin),
-    0 = miner_ct_utils:get_balance(MinerC, MinerCPubkeyBin),
+    ?assertMatch(ok, chain_commit(Chain, ConsensusMembers, TxnBundle)),
+    ?assertEqual(BalanceExpectedA, balance(Chain, A_Addr)),
+    ?assertEqual(BalanceExpectedB, balance(Chain, B_Addr)),
+    ?assertEqual(BalanceExpectedC, balance(Chain, C_Addr)),
 
     ok.
 
