@@ -632,7 +632,7 @@ bundleception_test(Config) ->
 
 %% Helpers --------------------------------------------------------------------
 
--type user() ::
+-type user() :: % Should be opaque when moved to a module.
     {Addr :: binary(), SigFun :: fun((binary()) -> binary())}.
 
 -type consensus_member() ::
@@ -655,13 +655,22 @@ user_new() ->
     SigFun = libp2p_crypto:mk_sig_fun(Priv),
     {Addr, SigFun}.
 
+-spec user_addr(user()) -> binary().
+user_addr({<<Addr/binary>>, F}) when is_function(F) ->
+    Addr.
+
+-spec user_sig_fun(user()) -> fun((binary()) -> binary()).
+user_sig_fun({<<_/binary>>, F}) when is_function(F) ->
+    F.
+
 -spec user_pick_from_cg(consensus_group()) -> {user(), consensus_group()}.
-user_pick_from_cg([{<<Addr/binary>>, {_, _, SigFun}} | ConsensusMembers]) ->
-    {{Addr, SigFun}, ConsensusMembers}.
+user_pick_from_cg([{<<Addr/binary>>, {_, _, F}} | CG]) when is_function(F) ->
+    {{Addr, F}, CG}.
 
 -spec user_balance(blockchain:blockchain(), user()) ->
     non_neg_integer().
-user_balance(Chain, {<<Addr/binary>>, _}) ->
+user_balance(Chain, User) ->
+    Addr = user_addr(User),
     Ledger = blockchain:ledger(Chain),
     case blockchain_ledger_v1:find_entry(Addr, Ledger) of
         {error, address_entry_not_found} ->
@@ -672,9 +681,9 @@ user_balance(Chain, {<<Addr/binary>>, _}) ->
 
 -spec user_pay(user(), user(), non_neg_integer(), non_neg_integer()) ->
     Txn :: term(). % TODO Txn type
-user_pay({<<Src/binary>>, SrcSigFun}, {<<Dst/binary>>, _}, Amount, Nonce) ->
-    Txn = blockchain_txn_payment_v1:new(Src, Dst, Amount, Nonce),
-    blockchain_txn_payment_v1:sign(Txn, SrcSigFun).
+user_pay(Src, Dst, Amount, Nonce) ->
+    Txn = blockchain_txn_payment_v1:new(user_addr(Src), user_addr(Dst), Amount, Nonce),
+    blockchain_txn_payment_v1:sign(Txn, user_sig_fun(Src)).
 
 -spec chain_commit(blockchain:blockchain(), [{_, {_, _, _}}], _) ->
     ok | {error, _}.
