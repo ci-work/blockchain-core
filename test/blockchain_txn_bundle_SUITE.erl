@@ -653,19 +653,27 @@ user_new() ->
     #{public := Pub, secret := Priv} = libp2p_crypto:generate_keys(ecc_compact),
     Addr = libp2p_crypto:pubkey_to_bin(Pub),
     SigFun = libp2p_crypto:mk_sig_fun(Priv),
+    ?assert(is_binary(Addr)),
+    ?assert(is_function(SigFun)),
     {Addr, SigFun}.
 
 -spec user_addr(user()) -> binary().
-user_addr({<<Addr/binary>>, F}) when is_function(F) ->
+user_addr({Addr, SigFun}) ->
+    ?assert(is_binary(Addr)),
+    ?assert(is_function(SigFun)),
     Addr.
 
 -spec user_sig_fun(user()) -> fun((binary()) -> binary()).
-user_sig_fun({<<_/binary>>, F}) when is_function(F) ->
-    F.
+user_sig_fun({Addr, SigFun}) ->
+    ?assert(is_binary(Addr)),
+    ?assert(is_function(SigFun)),
+    SigFun.
 
 -spec user_pick_from_cg(consensus_group()) -> {user(), consensus_group()}.
-user_pick_from_cg([{<<Addr/binary>>, {_, _, F}} | CG]) when is_function(F) ->
-    {{Addr, F}, CG}.
+user_pick_from_cg([{Addr, {_, _, SigFun}} | CG]) ->
+    ?assert(is_binary(Addr)),
+    ?assert(is_function(SigFun)),
+    {{Addr, SigFun}, CG}.
 
 -spec user_balance(blockchain:blockchain(), user()) ->
     non_neg_integer().
