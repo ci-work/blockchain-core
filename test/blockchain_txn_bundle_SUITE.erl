@@ -120,8 +120,8 @@ basic_test(Cfg) ->
     AmountPerTxn = 1000,
     Txns =
         [
-            user_pay(Src, Dst, AmountPerTxn, 1),
-            user_pay(Src, Dst, AmountPerTxn, 2)
+            user_txn_pay(Src, Dst, AmountPerTxn, 1),
+            user_txn_pay(Src, Dst, AmountPerTxn, 2)
         ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
     ?assertMatch(ok, chain_commit(Chain, ConsensusMembers, TxnBundle)),
@@ -152,8 +152,8 @@ negative_test(Cfg) ->
     Txns =
         %% Reversed order of nonces, invalidating the bundle:
         [
-            user_pay(Src, Dst, AmountPerTxn, 2),
-            user_pay(Src, Dst, AmountPerTxn, 1)
+            user_txn_pay(Src, Dst, AmountPerTxn, 2),
+            user_txn_pay(Src, Dst, AmountPerTxn, 1)
         ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
@@ -193,10 +193,10 @@ double_spend_test(Cfg) ->
     Txns =
         [
             %% good txn: first spend
-            user_pay(Src, Dst1, AmountPerTxn, SrcNonce),
+            user_txn_pay(Src, Dst1, AmountPerTxn, SrcNonce),
 
             %% bad txn: double-spend = same nonce, diff dst
-            user_pay(Src, Dst2, AmountPerTxn, SrcNonce)
+            user_txn_pay(Src, Dst2, AmountPerTxn, SrcNonce)
         ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
@@ -239,8 +239,8 @@ successive_test(Cfg) ->
     AmountBToC = AmountAToB - 1,
     Txns =
         [
-            user_pay(A, B, AmountAToB, 1),
-            user_pay(B, C, AmountBToC, 1)
+            user_txn_pay(A, B, AmountAToB, 1),
+            user_txn_pay(B, C, AmountBToC, 1)
         ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
@@ -278,8 +278,8 @@ invalid_successive_test(Cfg) ->
     AmountBToC = B_Balance0 + AmountAToB + 1,  % overdraw attempt
     Txns =
         [
-            user_pay(A, B, AmountAToB, 1),
-            user_pay(B, C, AmountBToC, 1)
+            user_txn_pay(A, B, AmountAToB, 1),
+            user_txn_pay(B, C, AmountBToC, 1)
         ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
@@ -320,8 +320,8 @@ single_payer_test(Cfg) ->
     AmountAToC = 3000,
     Txns =
         [
-            user_pay(A, B, AmountAToB, 1),
-            user_pay(A, C, AmountAToC, 2)
+            user_txn_pay(A, B, AmountAToB, 1),
+            user_txn_pay(A, C, AmountAToC, 2)
         ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
@@ -370,8 +370,8 @@ single_payer_invalid_test(Cfg) ->
 
     Txns =
         [
-            user_pay(A, B, AmountAToB, 1),
-            user_pay(A, C, AmountAToC, 2)
+            user_txn_pay(A, B, AmountAToB, 1),
+            user_txn_pay(A, C, AmountAToC, 2)
         ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
@@ -430,9 +430,9 @@ full_circle_test(Cfg) ->
 
     Txns =
         [
-            user_pay(A, B, AmountAToB, 1),
-            user_pay(B, C, AmountBToC, 1),
-            user_pay(C, A, AmountCToA, 1)
+            user_txn_pay(A, B, AmountAToB, 1),
+            user_txn_pay(B, C, AmountBToC, 1),
+            user_txn_pay(C, A, AmountCToA, 1)
         ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
@@ -687,9 +687,9 @@ user_balance(Chain, User) ->
             blockchain_ledger_entry_v1:balance(Entry)
     end.
 
--spec user_pay(user(), user(), non_neg_integer(), non_neg_integer()) ->
+-spec user_txn_pay(user(), user(), non_neg_integer(), non_neg_integer()) ->
     Txn :: term(). % TODO Txn type
-user_pay(Src, Dst, Amount, Nonce) ->
+user_txn_pay(Src, Dst, Amount, Nonce) ->
     Txn = blockchain_txn_payment_v1:new(user_addr(Src), user_addr(Dst), Amount, Nonce),
     blockchain_txn_payment_v1:sign(Txn, user_sig_fun(Src)).
 
