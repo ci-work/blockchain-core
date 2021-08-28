@@ -791,7 +791,9 @@ get_fixed_source_peer(SwarmTID) ->
         {ok, Nodes} -> string:split(Nodes, ",", all);
         _ -> []
     end,
+    lager:info("fixed addrs ~p and split ~p", [Nodes, FixedAddrs]),
     BaseAddrs = sets:to_list(sets:subtract(sets:from_list(FixedAddrs), sets:from_list(ExcludedAddrs))),
+    lager:info("base addrs ~p", [BaseAddrs]),
     RandomSourceAddr = lists:nth(length(BaseAddrs), BaseAddrs),
     lager:info("selected random fixed source address ~p", [RandomSourceAddr]),
     RandomSourceAddr.
