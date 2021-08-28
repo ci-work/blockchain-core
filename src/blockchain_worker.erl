@@ -788,10 +788,11 @@ get_fixed_source_peer(SwarmTID) ->
     ExcludedAddrs = [LocalAddr],
     FixedAddrs = case application:get_env(blockchain, fixed_sources, "") of
         {ok, ""} -> [];
-        {ok, Nodes} -> string:split(Nodes, ",", all);
+        {ok, Nodes} -> lager:info("fixed_sources ~p", [Nodes]),
+                       string:split(Nodes, ",", all);
         _ -> []
     end,
-    lager:info("fixed addrs ~p and split ~p", [Nodes, FixedAddrs]),
+    lager:info("fixed addrs ~p", [FixedAddrs]),
     BaseAddrs = sets:to_list(sets:subtract(sets:from_list(FixedAddrs), sets:from_list(ExcludedAddrs))),
     lager:info("base addrs ~p", [BaseAddrs]),
     RandomSourceAddr = lists:nth(length(BaseAddrs), BaseAddrs),
