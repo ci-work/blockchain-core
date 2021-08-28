@@ -794,7 +794,7 @@ get_fixed_source_peer(SwarmTID) ->
         _ -> []
     end,
     BaseAddrs = sets:to_list(sets:subtract(sets:from_list(FixedAddrs), sets:from_list(ExcludedAddrs))),
-    RandomSourceAddr = lists:nth(length(BaseAddrs), BaseAddrs),
+    RandomSourceAddr = lists:nth(rand:uniform(length(BaseAddrs)), BaseAddrs),
     lager:info("suggesting fixed_sources address ~p", [RandomSourceAddr]),
     RandomSourceAddr.
 
