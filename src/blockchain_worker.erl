@@ -786,13 +786,10 @@ get_fixed_peer(SwarmTID) ->
 get_fixed_source_peer(SwarmTID) ->
     LocalAddr = libp2p_swarm:p2p_address(SwarmTID),
     ExcludedAddrs = [LocalAddr],
-    FixedAddrs = case application:get_env(blockchain, fixed_sources, "") of
-        {ok, ""} -> lager:info("fixed_sources empty string", []),
-                    [];
-        {ok, Nodes} -> lager:info("fixed_sources ~p", [Nodes]),
-                       string:split(Nodes, ",", all);
-        _ -> lager:info("fixed_sources not found", []),
-             []
+    FixedAddrs = case application:get_env(blockchain, fixed_sources) of
+        {ok, ""} -> [];
+        {ok, Nodes} -> string:split(Nodes, ",", all);
+        _ -> []
     end,
     lager:info("fixed addrs ~p", [FixedAddrs]),
     BaseAddrs = sets:to_list(sets:subtract(sets:from_list(FixedAddrs), sets:from_list(ExcludedAddrs))),
