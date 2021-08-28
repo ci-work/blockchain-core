@@ -788,8 +788,8 @@ get_fixed_source_peer(SwarmTID) ->
     end,
     BaseAddrs = sets:to_list(sets:subtract(sets:from_list(FixedAddrs), sets:from_list(ExcludedAddrs))),
     RandomSourceAddr = lists:nth(length(BaseAddrs), BaseAddrs),
-	lager:info("selected random fixed source address", [RandomSourceAddr]),
-	RandomAddr.
+    lager:info("selected random fixed source address", [RandomSourceAddr]),
+    RandomAddr.
 
 -spec get_random_peer(SwarmTID :: ets:tab()) -> no_peers | string().
 get_random_peer(SwarmTID) ->
