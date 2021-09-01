@@ -37,7 +37,7 @@
  {<<"goldrush">>,{pkg,<<"goldrush">>,<<"0.1.9">>},1},
  {<<"h3">>,
   {git,"https://github.com/helium/erlang-h3.git",
-       {ref,"4aa6eb415214a9dedc2d29453fe1b64919031579"}},
+       {ref,"806639f0baa2f0170ec2571a8ee262e267ed0bdd"}},
   0},
  {<<"helium_proto">>,
   {git,"https://github.com/helium/proto.git",
