@@ -42,7 +42,7 @@
   0},
  {<<"exor_filter">>,
   {git,"https://github.com/mpope9/exor_filter",
-       {ref,"ab2c858ad9f608d36dc5f1c795236d9eb01d3d4e"}},
+       {ref,"8f875bc5abc838af9ddbf6e7d2af8cc735ad2810"}},
   0},
  {<<"getopt">>,{pkg,<<"getopt">>,<<"1.0.1">>},2},
  {<<"goldrush">>,{pkg,<<"goldrush">>,<<"0.1.9">>},1},
