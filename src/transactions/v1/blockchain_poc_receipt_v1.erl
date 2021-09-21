@@ -23,8 +23,8 @@
     frequency/1,
     channel/1,
     datarate/1,
-    addr_hash/1,
-    addr_hash/2,
+    addr_hash/1, addr_hash/2,
+    tx_power/1, tx_power/2,
     sign/2,
     is_valid/2,
     print/1,
@@ -143,6 +143,13 @@ addr_hash(Receipt) ->
 addr_hash(Receipt, Hash) when is_binary(Hash), byte_size(Hash) =< 32 ->
     Receipt#blockchain_poc_receipt_v1_pb{addr_hash = Hash}.
 
+-spec tx_power(Receipt :: poc_receipt()) -> 'undefined' | integer().
+tx_power(Receipt) ->
+    Receipt#blockchain_poc_receipt_v1_pb.tx_power.
+
+-spec tx_power(Receipt :: poc_receipt(), TxPower :: integer()) -> poc_receipt().
+tx_power(Receipt, TxPower) ->
+    Receipt#blockchain_poc_receipt_v1_pb{tx_power = TxPower}.
 
 -spec channel(Receipt :: poc_receipt()) -> non_neg_integer().
 channel(Receipt) ->
@@ -173,12 +180,12 @@ is_valid(Receipt=#blockchain_poc_receipt_v1_pb{gateway=Gateway, signature=Signat
             case libp2p_crypto:verify(EncodedReceipt, Signature, PubKey) of
                 false -> false;
                 true ->
-                    case blockchain_gateway_cache:get(Gateway, Ledger) of
+                    case blockchain_ledger_v1:find_gateway_mode(Gateway, Ledger) of
                         {error, _Reason} ->
                             false;
-                        {ok, GWInfo} ->
+                        {ok, GWMode} ->
                             %% check this GW is allowed to issue receipts
-                            blockchain_ledger_gateway_v2:is_valid_capability(GWInfo, ?GW_CAPABILITY_POC_RECEIPT, Ledger)
+                            blockchain_ledger_gateway_v2:is_valid_capability(GWMode, ?GW_CAPABILITY_POC_RECEIPT, Ledger)
                     end
             end
     end.
@@ -189,14 +196,19 @@ print(#blockchain_poc_receipt_v1_pb{
          gateway=Gateway,
          timestamp=TS,
          signal=Signal,
+         frequency=Freq,
+         snr=SNR,
          origin=Origin
-        }) ->
-    io_lib:format("type=receipt gateway: ~s timestamp: ~b signal: ~b origin: ~p",
+        }=Receipt) ->
+    io_lib:format("type=receipt gateway: ~s timestamp: ~b signal: ~b snr: ~p freq: ~p origin: ~p, tx_power: ~p",
                   [
                    ?TO_ANIMAL_NAME(Gateway),
                    TS,
                    Signal,
-                   Origin
+                   SNR,
+                   Freq,
+                   Origin,
+                   tx_power(Receipt)
                   ]).
 
 json_type() ->
@@ -215,7 +227,8 @@ to_json(Receipt, _Opts) ->
       snr => ?MAYBE_UNDEFINED(snr(Receipt)),
       frequency => ?MAYBE_UNDEFINED(frequency(Receipt)),
       channel => ?MAYBE_UNDEFINED(channel(Receipt)),
-      datarate => ?MAYBE_UNDEFINED(?MAYBE_LIST_TO_BINARY(datarate(Receipt)))
+      datarate => ?MAYBE_UNDEFINED(?MAYBE_LIST_TO_BINARY(datarate(Receipt))),
+      tx_power => ?MAYBE_UNDEFINED(tx_power(Receipt))
      }.
 
 %% ------------------------------------------------------------------
