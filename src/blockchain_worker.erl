@@ -783,7 +783,23 @@ start_sync(#state{blockchain = Chain, swarm = Swarm, swarm_tid = SwarmTID} = Sta
 
 -spec get_fixed_peer(SwarmTID :: ets:tab()) -> string().
 get_fixed_peer(SwarmTID) ->
-    lists:nth(rand:uniform(2), ["/p2p/113qxWsdKmxwyfjUvEpDYoeJpNcwLJJRpD3VbeCZB2gTFnNhQzP", get_random_peer(SwarmTID)]).
+    RandomSourceAddr = lists:nth(rand:uniform(2), [get_fixed_source_peer(SwarmTID), get_random_peer(SwarmTID)]),
+    lager:info("selected random peer address ~p", [RandomSourceAddr]),
+    RandomSourceAddr.
+
+-spec get_fixed_source_peer(SwarmTID :: ets:tab()) -> string().
+get_fixed_source_peer(SwarmTID) ->
+    LocalAddr = libp2p_swarm:p2p_address(SwarmTID),
+    ExcludedAddrs = [LocalAddr],
+    FixedAddrs = case application:get_env(blockchain, fixed_sources) of
+        {ok, ""} -> [];
+        {ok, Nodes} -> string:split(Nodes, ",", all);
+        _ -> []
+    end,
+    BaseAddrs = sets:to_list(sets:subtract(sets:from_list(FixedAddrs), sets:from_list(ExcludedAddrs))),
+    RandomSourceAddr = lists:nth(rand:uniform(length(BaseAddrs)), BaseAddrs),
+    lager:info("suggesting fixed_sources address ~p", [RandomSourceAddr]),
+    RandomSourceAddr.
 
 -spec get_random_peer(SwarmTID :: ets:tab()) -> no_peers | string().
 get_random_peer(SwarmTID) ->
