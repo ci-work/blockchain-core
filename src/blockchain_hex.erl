@@ -277,7 +277,7 @@ limit(Res, Vars, OccupiedCount) ->
 ) -> non_neg_integer().
 occupied_count(DensityTarget, ThisResHex, ClipETS) ->
     H3Neighbors = h3:k_ring(ThisResHex, 1),
-    OccupiedCount = lists:foldl(
+    lists:foldl(
         fun(Neighbor, Acc) ->
             case lookup(ClipETS, Neighbor) >= DensityTarget of
                 false -> Acc;
