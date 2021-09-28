@@ -290,7 +290,7 @@ occupied_count(DensityTarget, ThisResHex, ClipETS) ->
         Base,
         H3Neighbors
     ),
-    lager:info("HIP17MOD: Occupied Count - old, new: ~s ~s", [OccupiedCount - Base, OccupiedCount]),
+    lager:info("HIP17MOD: Occupied Count - old, new: ~p ~p", [OccupiedCount - Base, OccupiedCount]),
     OccupiedCount.
 
 -spec get_density_var(
