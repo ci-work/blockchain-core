@@ -276,7 +276,7 @@ limit(Res, Vars, OccupiedCount) ->
 occupied_count(DensityTarget, ThisResHex, ClipETS) ->
     H3Neighbors = h3:k_ring(ThisResHex, 1),
     %% HIP17 states Note there are 7 "neighbor" hexs (6 + reference hex in center).
-    Base = case lookup(ClipETS, Neighbor) >= DensityTarget of
+    Base = case lookup(ClipETS, ThisResHex) >= DensityTarget of
                false -> 0;
                true -> 1
            end,
