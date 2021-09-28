@@ -80,6 +80,7 @@ scale(Location, _VarMap, TargetRes, Ledger) ->
 
     FinalScale = lists:foldl(fun(Res, Acc) ->
                         Parent = h3:parent(Location, Res),
+                        lager:info("hip17_res_11 check: ~s", Res),
                         case lookup(UnclipETS, Parent) of
                             0 -> Acc;
                             Unclipped -> Acc * (lookup(ClipETS, Parent) / Unclipped)
