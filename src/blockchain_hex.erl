@@ -78,13 +78,15 @@ scale(Location, _VarMap, TargetRes, Ledger) ->
     UnclipETS = get(?PRE_UNCLIP_TBL),
     ClipETS = get(?PRE_CLIP_TBL),
 
-    lists:foldl(fun(Res, Acc) ->
+    FinalScale = lists:foldl(fun(Res, Acc) ->
                         Parent = h3:parent(Location, Res),
                         case lookup(UnclipETS, Parent) of
                             0 -> Acc;
                             Unclipped -> Acc * (lookup(ClipETS, Parent) / Unclipped)
                         end
-                end, 1.0, lists:seq(R, TargetRes, -1)).
+                end, 1.0, lists:seq(R, TargetRes, -1)),
+    lager:info("HIP17MOD hex, scale: ~p ~p", [Location, FinalScale]),
+    FinalScale.
 
 
 -spec var_map(Ledger :: blockchain_ledger_v1:ledger()) -> {error, any()} | {ok, var_map()}.
