@@ -277,11 +277,6 @@ limit(Res, Vars, OccupiedCount) ->
 ) -> non_neg_integer().
 occupied_count(DensityTarget, ThisResHex, ClipETS) ->
     H3Neighbors = h3:k_ring(ThisResHex, 1),
-    %% HIP17 states Note there are 7 "neighbor" hexs (6 + reference hex in center).
-    Base = case lookup(ClipETS, ThisResHex) >= DensityTarget of
-               false -> 0;
-               true -> 1
-           end,
     OccupiedCount = lists:foldl(
         fun(Neighbor, Acc) ->
             case lookup(ClipETS, Neighbor) >= DensityTarget of
@@ -289,11 +284,9 @@ occupied_count(DensityTarget, ThisResHex, ClipETS) ->
                 true -> Acc + 1
             end
         end,
-        Base,
+        0,
         H3Neighbors
-    ),
-    lager:debug("HIP17MOD: Occupied Count - old, new: ~p ~p", [OccupiedCount - Base, OccupiedCount]),
-    OccupiedCount.
+    ).
 
 -spec get_density_var(
     Var :: atom(),
