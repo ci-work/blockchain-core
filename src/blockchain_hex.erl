@@ -80,11 +80,12 @@ scale(Location, _VarMap, TargetRes, Ledger) ->
 
     FinalScale = lists:foldl(fun(Res, Acc) ->
                         Parent = h3:parent(Location, Res),
-                        case lookup(UnclipETS, Parent) of
+                        Step = case lookup(UnclipETS, Parent) of
                             0 -> Acc;
                             Unclipped -> Acc * (lookup(ClipETS, Parent) / Unclipped)
                         end,
-                        lager:info("HIP17MOD hex, res, scale: ~p ~p ~p", [h3:to_string(Location), Res, Acc])
+                        lager:info("HIP17MOD hex, res, scale: ~p ~p ~p", [h3:to_string(Location), Res, Step]),
+                        Step
                 end, 1.0, lists:seq(R, TargetRes, -1)),
     lager:info("HIP17MOD hex, scale: ~p ~p", [h3:to_string(Location), FinalScale]),
     FinalScale.
