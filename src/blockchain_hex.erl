@@ -84,7 +84,7 @@ scale(Location, _VarMap, TargetRes, Ledger) ->
                             0 -> Acc;
                             Unclipped -> Acc * (lookup(ClipETS, Parent) / Unclipped)
                         end,
-                        lager:info("HIP17MOD hex, res, scale: ~p ~p ~p", [h3:to_string(Location), Res, FinalScale]),
+                        lager:info("HIP17MOD hex, res, scale: ~p ~p ~p", [h3:to_string(Location), Res, FinalScale])
                 end, 1.0, lists:seq(R, TargetRes, -1)),
     lager:info("HIP17MOD hex, scale: ~p ~p", [h3:to_string(Location), FinalScale]),
     FinalScale.
