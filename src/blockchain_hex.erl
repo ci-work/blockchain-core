@@ -240,9 +240,9 @@ precalc(Testing, Ledger) ->
                         DensityTarget = element(2, element(Level, Vars)),
                         OccupiedCount = occupied_count(DensityTarget, ResHex, ClipETS),
                         Limit = limit(Level, Vars, OccupiedCount),
-                        Ct = lookup(UnclipETS, ResHex),
-                        Actual = min(Limit, Ct),
-                        ets:insert(ClipETS, {ResHex, Actual})
+                        %% Limit should be used as is, do min(Limit, lookup(UnclipETS, ResHex)) is to
+                        %% cage the reward_scale at 1 and not allow upwards scaling 
+                        ets:insert(ClipETS, {ResHex, Limit})
                 end, Acc2),
               Acc2
       end,
@@ -272,7 +272,11 @@ limit(Res, Vars, OccupiedCount) ->
 ) -> non_neg_integer().
 occupied_count(DensityTarget, ThisResHex, ClipETS) ->
     H3Neighbors = h3:k_ring(ThisResHex, 1),
-
+    %% HIP17 states Note there are 7 "neighbor" hexs (6 + reference hex in center).
+    Base = case lookup(ClipETS, Neighbor) >= DensityTarget of
+               false -> 0;
+               true -> 1
+           end,
     lists:foldl(
         fun(Neighbor, Acc) ->
             case lookup(ClipETS, Neighbor) >= DensityTarget of
@@ -280,7 +284,7 @@ occupied_count(DensityTarget, ThisResHex, ClipETS) ->
                 true -> Acc + 1
             end
         end,
-        0,
+        Base,
         H3Neighbors
     ).
 
