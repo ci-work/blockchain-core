@@ -240,8 +240,11 @@ precalc(Testing, Ledger) ->
                         DensityTarget = element(2, element(Level, Vars)),
                         OccupiedCount = occupied_count(DensityTarget, ResHex, ClipETS),
                         Limit = limit(Level, Vars, OccupiedCount),
+                        Unclipped = lookup(UnclipETS, ResHex),
+                        LimitedHexDensityLimit = min(Limit, Unclipped), 
                         %% Limit should be used as is, do min(Limit, lookup(UnclipETS, ResHex)) is to
-                        %% cage the reward_scale at 1 and not allow upwards scaling 
+                        %% cage the reward_scale at 1 and not allow upwards scaling
+                        lager:info("HIP17MOD: Hex Densist Limit - old, new: ~p ~p", [LimitedHexDensityLimit, Limit]), 
                         ets:insert(ClipETS, {ResHex, Limit})
                 end, Acc2),
               Acc2
@@ -277,7 +280,7 @@ occupied_count(DensityTarget, ThisResHex, ClipETS) ->
                false -> 0;
                true -> 1
            end,
-    lists:foldl(
+    OccupiedCount = lists:foldl(
         fun(Neighbor, Acc) ->
             case lookup(ClipETS, Neighbor) >= DensityTarget of
                 false -> Acc;
@@ -286,7 +289,9 @@ occupied_count(DensityTarget, ThisResHex, ClipETS) ->
         end,
         Base,
         H3Neighbors
-    ).
+    ),
+    lager:info("HIP17MOD: Occupied Count - old, new: ~s ~s", [OccupiedCount - Base, OccupiedCount]),
+    OccupiedCount.
 
 -spec get_density_var(
     Var :: atom(),
