@@ -199,6 +199,7 @@ precalc(Testing, Ledger) ->
     %% This won't do the same thing as the old code if we make it so that we care about the
     %% densities at 11 and 12.  it's not clear how they would differ, we'd need to experiment.
     MaxRes = min(12, lists:max(UsedResolutions) + 1),
+    lager:info("HIP17MOD - maxres, used resolutions: ~p (~p)", [MaxRes, UsedResolutions]);
     TestMode = application:get_env(blockchain, hip17_test_mode, false),
     InitHexes0 =
         blockchain_ledger_v1:cf_fold(
