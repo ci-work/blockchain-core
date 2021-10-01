@@ -250,7 +250,7 @@ precalc(Testing, Ledger) ->
                         %% Limit should be used as is, do min(Limit, lookup(UnclipETS, ResHex)) is to
                         %% cage the reward_scale at 1 and not allow upwards scaling
                         lager:debug("HIP17MOD: Hex Densist Limit - old, new: ~p ~p", [LimitedHexDensityLimit, Limit]), 
-                        ets:insert(ClipETS, {ResHex, Limit})
+                        ets:insert(ClipETS, {ResHex, LimitedHexDensityLimit})
                 end, Acc2),
               lager:info("HIP17 Level: ~p", [Level]),
               Acc2
