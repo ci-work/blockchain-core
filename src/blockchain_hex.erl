@@ -84,10 +84,10 @@ scale(Location, _VarMap, TargetRes, Ledger) ->
                             0 -> Acc;
                             Unclipped -> Acc * (lookup(ClipETS, Parent) / Unclipped)
                         end,
-                        lager:info("HIP17MOD hex, res, scale: ~p ~p ~p (~p/~p)", [h3:to_string(Location), Res, Step, lookup(ClipETS, Parent), lookup(UnclipETS, Parent)]),
+                        lager:debug("HIP17MOD hex, res, scale: ~p ~p ~p (~p/~p)", [h3:to_string(Location), Res, Step, lookup(ClipETS, Parent), lookup(UnclipETS, Parent)]),
                         Step
                 end, 1.0, lists:seq(R, TargetRes, -1)),
-    lager:info("HIP17MOD hex, scale: ~p ~p", [h3:to_string(Location), FinalScale]),
+    lager:debug("HIP17MOD hex, scale: ~p ~p", [h3:to_string(Location), FinalScale]),
     FinalScale.
 
 
@@ -252,6 +252,7 @@ precalc(Testing, Ledger) ->
                         lager:debug("HIP17MOD: Hex Densist Limit - old, new: ~p ~p", [LimitedHexDensityLimit, Limit]), 
                         ets:insert(ClipETS, {ResHex, Limit})
                 end, Acc2),
+              lager:info("HIP17 Level: ~p", [Level]),
               Acc2
       end,
       InitHexes,
