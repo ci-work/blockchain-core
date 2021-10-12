@@ -78,7 +78,7 @@
  {<<"intercept">>,{pkg,<<"intercept">>,<<"1.0.0">>},2},
  {<<"lager">>,{pkg,<<"lager">>,<<"3.9.2">>},0},
  {<<"libp2p">>,
-  {git,"https://github.com/helium/erlang-libp2p.git",
+  {git,"https://github.com/ci-work/erlang-libp2p.git",
        {ref,"2cddf146b4f62f2e24ce8e10ac30c7a0a2677f3e"}},
   0},
  {<<"libp2p_crypto">>,{pkg,<<"libp2p_crypto">>,<<"1.4.1">>},1},
