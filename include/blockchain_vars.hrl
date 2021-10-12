@@ -195,6 +195,7 @@
 -define(rewards_txn_version, rewards_txn_version).
 -define(hip15_tx_reward_unit_cap, hip15_tx_reward_unit_cap).
 -define(witness_reward_decay_rate, witness_reward_decay_rate).
+-define(witness_reward_decay_exclusion, witness_reward_decay_exclusion).
 
 %%%
 %%% bundle txn vars
@@ -516,3 +517,11 @@
 %% they do, we will re-evaluate accordingly.
 %%
 %% Refer to blockchain_region_SUITE for an example
+
+%% ------------------------------------------------------------------
+%% This is a general purpose variable. We can use it for any transaction
+%% to specify which version of it we will support on chain.
+%%
+%% As an example, blockchain_txn_transfer_hotspot_v2, will get enabled
+%% when this value is set to >= 2.
+-define(transaction_validity_version, transfer_hotspot_txn_version).    % pos_integer

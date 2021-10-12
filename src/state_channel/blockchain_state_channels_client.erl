@@ -109,8 +109,8 @@ gc_state_channels(SCIDs) ->
 %% init, terminate and code_change
 %% ------------------------------------------------------------------
 init(Args) ->
-    lager:info("~p init with ~p", [?SERVER, Args]),
     SCClientTransportHandler = application:get_env(blockchain, sc_client_transport_handler, blockchain_state_channel_handler),
+    lager:info("~p init with ~p  hanlder: ~p", [?SERVER, Args, SCClientTransportHandler]),
     ok = blockchain_event:add_handler(self()),
     Swarm = maps:get(swarm, Args),
     SwarmTID = libp2p_swarm:tid(Swarm),
@@ -358,7 +358,8 @@ handle_info(_Msg, State) ->
                     State :: state()) -> state().
 handle_packet(Packet, RoutesOrAddresses, Region, ReceivedTime, #state{swarm_tid=SwarmTID,
                                                                       sc_client_transport_handler = SCClientTransportHandler}=State0) ->
-    lager:info("handle_packet ~p to ~p", [lager:pr(Packet, blockchain_helium_packet_v1), print_routes(RoutesOrAddresses)]),
+    
+    lager:info("handle_packet ~p to ~p with handler ~p", [lager:pr(Packet, blockchain_helium_packet_v1), print_routes(RoutesOrAddresses), SCClientTransportHandler]),
     lists:foldl(
         fun(RouteOrAddress, StateAcc) ->
                 StreamKey = case blockchain_ledger_routing_v1:is_routing(RouteOrAddress) of
@@ -668,7 +669,7 @@ send_packet(PubkeyBin, SigFun, Stream, Packet, Region, ReceivedTime) ->
 send_offer(PubkeyBin, SigFun, Stream, Packet, Region) ->
     OfferMsg0 = blockchain_state_channel_offer_v1:from_packet(Packet, PubkeyBin, Region),
     OfferMsg1 = blockchain_state_channel_offer_v1:sign(OfferMsg0, SigFun),
-    lager:info("OfferMsg1: ~p", [OfferMsg1]),
+    lager:debug("OfferMsg1: ~p", [OfferMsg1]),
     blockchain_state_channel_common:send_offer(Stream, OfferMsg1).
 
 -spec is_hotspot_in_router_oui(PubkeyBin :: libp2p_crypto:pubkey_bin(),
@@ -744,7 +745,7 @@ maybe_send_packets(AddressOrOUI, HandlerPid, #state{pubkey_bin=PubkeyBin, sig_fu
         Address when is_list(Address) ->
             State1 = case blockchain:config(?sc_version, blockchain:ledger(State#state.chain)) of
                          {ok, N} when N >= 2 ->
-                             lager:info("valid banner for ~p, sending ~p packets", [AddressOrOUI, length(Packets)]),
+                             lager:debug("valid banner for ~p, sending ~p packets", [AddressOrOUI, length(Packets)]),
                              lists:foldl(
                                fun({Packet, Region, ReceivedTime}, Acc) ->
                                        ok = send_offer(PubkeyBin, SigFun, HandlerPid, Packet, Region),
@@ -957,7 +958,7 @@ close_state_channel(SC, State=#state{pubkey_bin=PubkeyBin, sig_fun=SigFun}) ->
             %% see if we have any conflicts with the supplied close SC:
             case lists:filter(fun(E) -> conflicts(E, SC) end, SCs) of
                 [] ->
-                    lager:info("no direct conflict"),
+                    lager:debug("no direct conflict"),
                     %% find the latest state channel we have, and what it conflicts with
                     %%
                     %% first take the cartesian product of all the state channels, and select the conflicting ones

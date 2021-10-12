@@ -1012,6 +1012,10 @@ validate_var(?hip15_tx_reward_unit_cap, Value) ->
     %% According to HIP-15, the cap should be set to 2.0
     %% 5.0 is just for future proofing if need be
     validate_float(Value, "hip15_tx_reward_unit_cap", 0.0, 5.0);
+validate_var(?witness_reward_decay_rate, Value) ->
+    validate_float(Value, "witness_reward_decay_rate", 0.0, 5.0);
+validate_var(?witness_reward_decay_exclusion, Value) ->
+    validate_int(Value, "witness_reward_decay_exclusion", 0, 10, false);
 
 %% bundle vars
 validate_var(?max_bundle_size, Value) ->
@@ -1223,6 +1227,11 @@ validate_var(?density_tgt_res, Value) ->
 validate_var(?hip17_interactivity_blocks, Value) ->
     validate_int(Value, "hip17_interactivity_blocks", 1, 5000, false);
 
+validate_var(?transaction_validity_version, Value) ->
+    case Value of
+        2 -> ok;
+        _ -> throw({error, {invalid_transaction_validity_version, Value}})
+    end;
 validate_var(?assert_loc_txn_version, Value) ->
     case Value of
         N when is_integer(N), N >= 1, N =< 2 -> ok;
