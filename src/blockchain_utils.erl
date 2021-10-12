@@ -17,6 +17,7 @@
     serialize_hash/1, deserialize_hash/1,
     hex_to_bin/1, bin_to_hex/1,
     poc_id/1,
+    pfind/2,
     pmap/2,
     addr2name/1,
     distance/2,
@@ -47,7 +48,12 @@
 
     verify_multisig/3,
     count_votes/3,
-    poc_per_hop_max_witnesses/1
+    poc_per_hop_max_witnesses/1,
+
+    get_vars/2, get_var/2,
+    var_cache_stats/0,
+    teardown_var_cache/0
+
 ]).
 
 -ifdef(TEST).
@@ -60,6 +66,9 @@
 -define(TRANSMIT_POWER, 28).
 -define(MAX_ANTENNA_GAIN, 6).
 -define(POC_PER_HOP_MAX_WITNESSES, 5).
+
+%% key: {is_aux, vars_nonce, var_name}
+-define(VAR_CACHE, var_cache).
 
 -type zone_map() :: #{h3:index() => gateway_score_map()}.
 -type gateway_score_map() :: #{libp2p_crypto:pubkey_bin() => {blockchain_ledger_gateway_v2:gateway(), float()}}.
@@ -171,6 +180,44 @@ hex_to_bin(Hex) ->
 poc_id(PubKeyBin) when is_binary(PubKeyBin) ->
     Hash = crypto:hash(sha256, PubKeyBin),
     ?BIN_TO_B64(Hash).
+
+-spec pfind(F :: function(), list(list())) -> boolean() | {true, any()}.
+pfind(F, ToDos) ->
+    Opts = [
+        {fullsweep_after, 0},
+        {priority, high}
+    ],
+    Parent = self(),
+    Ref = erlang:make_ref(),
+    Workers = lists:foldl(
+        fun(Args, Acc) ->
+            Pid = erlang:spawn_opt(
+                fun() ->
+                    Result = erlang:apply(F, Args),
+                    Parent ! {Ref, Result}
+                end,
+                Opts
+            ),
+            [Pid|Acc]
+        end,
+        [],
+        ToDos
+    ),
+    Results = pfind_rcv(Ref, false, erlang:length(ToDos)),
+    [erlang:exit(Pid, done) || Pid <- Workers],
+    Results.
+ 
+pfind_rcv(_Ref, Result, 0) ->
+    Result;
+pfind_rcv(Ref, Result, Left) ->
+    receive
+        {Ref, true} ->
+            true;
+        {Ref, {true, Data}} ->
+            {true, Data};
+        {Ref, _} ->
+            pfind_rcv(Ref, Result, Left-1)
+    end.
 
 pmap(F, L) ->
     Width = validation_width(),
@@ -545,6 +592,66 @@ do_condition_check([{Condition, Error}|Tail], _PrevErr, true) ->
 majority(N) ->
     (N div 2) + 1.
 
+-spec get_vars(VarList :: [atom()], Ledger :: blockchain_ledger_v1:ledger()) -> #{atom() => any()}.
+get_vars(VarList, Ledger) ->
+    {ok, VarsNonce} = blockchain_ledger_v1:vars_nonce(Ledger),
+    IsAux = blockchain_ledger_v1:is_aux(Ledger),
+    lists:foldl(
+      fun(VarName, Acc) ->
+              %% NOTE: This isn't ideal but in order for get_var/2 to
+              %% correspond with blockchain:config/2, it returns {ok, ..} | {error, ..}
+              %% So we just put undefined for any error lookups here.
+              %% The callee must handle those situations.
+              case get_var_(VarName, IsAux, VarsNonce, Ledger) of
+                  {ok, VarValue} -> maps:put(VarName, VarValue, Acc);
+                  _ -> maps:put(VarName, undefined, Acc)
+              end
+      end, #{}, VarList).
+
+-spec get_var_(VarName :: atom(),
+               HasAux :: boolean(),
+               VarsNonce :: non_neg_integer(),
+               Ledger :: blockchain_ledger_v1:ledger()) -> {ok, any()} | {error, any()}.
+get_var_(VarName, HasAux, VarsNonce, Ledger) ->
+    e2qc:cache(
+        ?VAR_CACHE,
+        {HasAux, VarsNonce, VarName},
+        fun() ->
+            get_var_(VarName, Ledger)
+        end
+    ).
+
+-spec get_var(VarName :: atom(), Ledger :: blockchain_ledger_v1:ledger()) -> {ok, any()} | {error, any()}.
+get_var(VarName, Ledger) ->
+    %% NOTE: Special casing vars_nonce if it is not_found.
+    %% This may happen if miner is booted without a genesis block (mostly in testing).
+    VarsNonce =
+    case blockchain_ledger_v1:vars_nonce(Ledger) of
+        {ok, VN} -> VN;
+        {error, not_found} -> 0
+    end,
+
+    IsAux = blockchain_ledger_v1:is_aux(Ledger),
+    e2qc:cache(
+        ?VAR_CACHE,
+        {IsAux, VarsNonce, VarName},
+        fun() ->
+            get_var_(VarName, Ledger)
+        end
+    ).
+
+-spec get_var_(VarName :: atom(), Ledger :: blockchain_ledger_v1:ledger()) -> {ok, any()} | {error, any()}.
+get_var_(VarName, Ledger) ->
+    blockchain_ledger_v1:config(VarName, Ledger).
+
+-spec var_cache_stats() -> list().
+var_cache_stats() ->
+    e2qc:stats(?VAR_CACHE).
+
+-spec teardown_var_cache() -> ok.
+teardown_var_cache() ->
+    e2qc:teardown(?VAR_CACHE).
+
 %% ------------------------------------------------------------------
 %% EUNIT Tests
 %% ------------------------------------------------------------------
@@ -688,5 +795,24 @@ fold_condition_checks_bad_test() ->
            {fun() -> 10 > 100 end, {error, '10_not_greater_than_100'}},
            {fun() -> <<"blort">> == <<"blort">> end, {error, blort_isnt_blort}}],
     ?assertEqual({error, '10_not_greater_than_100'}, fold_condition_checks(Bad)).
+
+pfind_test() ->
+    F = fun(I) ->
+        case I rem 2 == 0 of
+            true ->
+                case I == 2 of
+                    true ->
+                        {true, I};
+                    false ->
+                        timer:sleep(10),
+                        {true, I}
+                end;
+            false ->
+                false
+        end
+    end,
+    Args = [[I] || I <- lists:seq(1, 6)],
+    ?assertEqual({true, 2}, pfind(F, Args)),
+    ok.
 
 -endif.
