@@ -15,7 +15,6 @@
 %% ------------------------------------------------------------------
 -export([
     start/1,
-    shutdown/2,
     get/1,
     handle_offer/3,
     handle_packet/3
@@ -34,11 +33,13 @@
 ]).
 
 -define(SERVER, ?MODULE).
--define(SHUTDOWN_TIMER, 1000).
 -define(FP_RATE, 0.99).
 -define(MAX_PAYLOAD_SIZE, 255). % lorawan max payload size is 255 bytes
+-define(EXPIRED, expired).
+-define(OVERSPENT, overspent).
 
 -record(state, {
+    parent :: pid(),
     id :: blockchain_state_channel_v1:id(),
     state_channel :: blockchain_state_channel_v1:state_channel(),
     skewed :: skewed:skewed(),
@@ -63,14 +64,9 @@
 start(Args) ->
     gen_server:start(?SERVER, Args, []).
 
--spec shutdown(Pid :: pid(), Reason :: any()) -> ok.
-shutdown(Pid, Reason) ->
-    catch gen_server:stop(Pid, {shutdown, Reason}, ?SHUTDOWN_TIMER),
-    ok.
-
 -spec get(Pid :: pid()) -> blockchain_state_channel_v1:state_channel().
 get(Pid) ->
-    gen_server:call(Pid, get, infinity).
+    gen_server:call(Pid, get).
 
 -spec handle_offer(
     Pid :: pid(),
@@ -102,8 +98,9 @@ handle_packet(Pid, SCPacket, HandlerPid) ->
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
 init(Args) ->
-    erlang:process_flag(trap_exit, true),
     lager:info("~p init with ~p", [?SERVER, Args]),
+    Parent = maps:get(parent, Args),
+    _Ref = erlang:monitor(process, Parent),
     SC = maps:get(state_channel, Args),
     Amount = blockchain_state_channel_v1:amount(SC),
     {ok, Bloom} = bloom:new_optimal(max(Amount, 1), ?FP_RATE),
@@ -124,7 +121,10 @@ init(Args) ->
     ok = refresh_cache(SC),
     Owner = maps:get(owner, Args),
     {_, OwnerSigFun} = Owner,
+    ok = blockchain_event:add_handler(self()),
+    lager:info("started ~p", [blockchain_utils:addr2name(ID)]),
     State = #state{
+        parent = Parent,
         id = ID,
         state_channel = blockchain_state_channel_v1:sign(SC, OwnerSigFun),
         skewed = maps:get(skewed, Args),
@@ -154,6 +154,32 @@ handle_cast(_Msg, State) ->
     lager:warning("rcvd unknown cast msg: ~p", [_Msg]),
     {noreply, State}.
 
+handle_info({blockchain_event, {new_chain, Chain}}, State) ->
+    {noreply, State#state{chain=Chain}};
+handle_info(
+    {blockchain_event, {add_block, _BlockHash, _Syncing, Ledger}},
+    #state{id=ID, state_channel=SC, owner={Owner, OwnerSigFun}}=State
+) ->
+    Name = blockchain_utils:addr2name(ID),
+    {ok, Height} = blockchain_ledger_v1:current_height(Ledger),
+    ExpireAt = blockchain_state_channel_v1:expire_at_block(SC),
+    lager:debug("got block ~p for ~p expires at ~p", [Height, Name, ExpireAt]),
+    case ExpireAt =< Height of
+        false ->
+            {noreply, State};
+        true ->
+            ClosedSC = blockchain_state_channel_v1:state(closed, SC),
+            SignedSC = blockchain_state_channel_v1:sign(ClosedSC, OwnerSigFun),
+            Txn = blockchain_txn_state_channel_close_v1:new(SignedSC, Owner),
+            SignedTxn = blockchain_txn_state_channel_close_v1:sign(Txn, OwnerSigFun),
+            ok = blockchain_worker:submit_txn(SignedTxn),
+            {stop, {shutdown, ?EXPIRED}, State#state{state_channel=SignedSC}}
+    end;
+handle_info(?OVERSPENT, State) ->
+    lager:info("state channel overspent shuting down"),
+    {stop, {shutdown, ?OVERSPENT}, State};
+handle_info({'DOWN', _Ref, process, Parent, _}, #state{parent=Parent}=State) ->
+    {stop, {shutdown, parent_down}, State};
 handle_info({'DOWN', _Ref, process, Pid, _}, #state{handlers=Handlers}=State) ->
     FilteredHandlers =
         maps:filter(
@@ -170,27 +196,17 @@ handle_info(_Msg, State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-terminate(
-    {shutdown, cleanup},
-    #state{state_channel=SC, skewed=Skewed, db=DB, owner={_Owner, OwnerSigFun}}=_State
-) ->
+terminate(Reason, #state{id=ID, state_channel=SC, skewed=Skewed, db=DB, owner={_Owner, OwnerSigFun}}=_State) ->
     Deleted = blockchain_state_channels_cache:delete_pids(self()),
     SignedSC = blockchain_state_channel_v1:sign(SC, OwnerSigFun),
+    ok = blockchain_state_channels_server:update_state_channel(SignedSC),
     ok = blockchain_state_channel_v1:save(DB, SignedSC, Skewed),
-    lager:info("terminate: ~p, deleted ~p from cache", [cleanup, Deleted]),
-    ok;
-terminate(Reason, #state{state_channel=SC, skewed=Skewed, db=DB, owner={_Owner, OwnerSigFun}}=_State) ->
-    Deleted = blockchain_state_channels_cache:delete_pids(self()),
-    SignedSC = blockchain_state_channel_v1:sign(SC, OwnerSigFun),
-    ok = blockchain_state_channel_v1:save(DB, SignedSC, Skewed),
-    ok = blockchain_state_channels_server:handle_worker_terminate(SignedSC, Reason),
-    lager:info("terminate: ~p, deleted ~p from cache", [Reason, Deleted]),
+    lager:info("terminate ~p for : ~p, deleted ~p from cache", [blockchain_utils:addr2name(ID), Reason, Deleted]),
     ok.
 
 %% ------------------------------------------------------------------
 %% Internal Function Definitions
 %% ------------------------------------------------------------------
-
 -spec offer(
     Offer :: blockchain_state_channel_offer_v1:offer(),
     HandlerPid :: pid(),
@@ -223,7 +239,9 @@ offer(
                 "dropping this packet because it will overspend DC ~p, (cost: ~p, total_dcs: ~p)",
                 [DCAmount, NumDCs, TotalDCs]
             ),
-            {stop, {shutdown, overspent}, State0};
+            %% This allow for packets (accepted offer) to come threw 
+            _ = erlang:send_after(1000, self(), ?OVERSPENT),
+            {noreply, State0};
         false ->
             Routing = blockchain_state_channel_offer_v1:routing(Offer),
             lager:debug("routing: ~p, hotspot: ~p", [Routing, HotspotName]),
@@ -285,8 +303,10 @@ packet(
     HotspotID = blockchain_state_channel_packet_v1:hotspot(SCPacket),
     case SCVer > 1 andalso bloom:check_and_set(Bloom, Payload) of
         true ->
+            lager:debug("skewed already updated with ~p (sc version=~p)", [Payload, SCVer]),
             maybe_update_streams(HotspotID, HandlerPid, State0);
         false ->
+            lager:debug("updating skewed with ~p", [Payload]),
             {SC1, Skewed1} = blockchain_state_channel_v1:add_payload(Payload, SC0, Skewed0),
             SC2 = case SCVer of
                 2 ->

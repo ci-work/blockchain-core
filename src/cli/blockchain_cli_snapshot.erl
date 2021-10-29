@@ -132,20 +132,21 @@ snapshot_grab_usage() ->
 
 snapshot_grab_cmd() ->
     [
-     [["snapshot", "grab", '*', '*', '*' ], [], [], fun snapshot_grab/5]
+     [["snapshot", "grab", '*', '*', '*' ], [], [], fun snapshot_grab/3]
     ].
 
-snapshot_grab("snapshot", "grab", HeightStr, HashStr, Filename) ->
+snapshot_grab(["snapshot", "grab", HeightStr, HashStr, Filename], [], []) ->
     try
         Height = list_to_integer(HeightStr),
         Hash = hex_to_binary(HashStr),
         {ok, Snapshot} = blockchain_worker:grab_snapshot(Height, Hash),
-        file:write_file(Filename, Snapshot)
+        %% NOTE: grab_snapshot returns a deserialized snapshot
+        file:write_file(Filename, blockchain_ledger_snapshot_v1:serialize(Snapshot))
     catch
         _Type:Error ->
             [clique_status:text(io_lib:format("failed: ~p", [Error]))]
     end;
-snapshot_grab(_, _, _, _, _) ->
+snapshot_grab([_, _, _, _, _], [], []) ->
     usage.
 
 snapshot_diff_cmd() ->

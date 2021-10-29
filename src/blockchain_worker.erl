@@ -381,10 +381,10 @@ handle_call({integrate_genesis_block_synchronously, GenesisBlock}, _From, #state
     {Result, S1} = integrate_genesis_block_(GenesisBlock, S0),
     {reply, Result, S1};
 handle_call(Msg, _From, #state{blockchain={no_genesis, _}}=State) ->
-    lager:warning("Called when blockchain={no_genesis_}. Returning undefined. Msg: ~p", [Msg]),
+    lager:debug("Called when blockchain={no_genesis_}. Returning undefined. Msg: ~p", [Msg]),
     {reply, undefined, State};
 handle_call(Msg, _From, #state{blockchain=undefined}=State) ->
-    lager:warning("Called when blockchain=undefined. Returning undefined. Msg: ~p", [Msg]),
+    lager:debug("Called when blockchain=undefined. Returning undefined. Msg: ~p", [Msg]),
     {reply, undefined, State};
 handle_call(num_consensus_members, _From, #state{blockchain = Chain} = State) ->
     {ok, N} = blockchain:config(?num_consensus_members, blockchain:ledger(Chain)),
@@ -1004,7 +1004,8 @@ grab_snapshot(Height, Hash) ->
                             {error, not_found};
                         cancel ->
                             lager:info("snapshot sync cancelled"),
-                            libp2p_framed_stream:close(Stream);
+                            _ = libp2p_framed_stream:close(Stream),
+                            {error, snap_sync_cancel};
                         {'DOWN', Ref1, process, Stream, normal} ->
                             {error, down};
                         {'DOWN', Ref1, process, Stream, Reason} ->
@@ -1022,27 +1023,35 @@ start_snapshot_sync(Hash, Height, Peer,
                     #state{blockchain=Chain, swarm_tid=SwarmTID, sync_paused=SyncPaused}) ->
     spawn_monitor(fun() ->
                           try
-                              BaseUrl = application:get_env(blockchain, s3_base_url, undefined),
+                              BaseUrl = application:get_env(blockchain, snap_source_base_url, undefined),
                               HonorQS = application:get_env(blockchain, honor_quick_sync, true),
+                              FetchLatest = application:get_env(blockchain, fetch_latest_from_snap_source, true),
 
                               case {HonorQS, SyncPaused, BaseUrl} of
                                   {true, false, undefined} ->
-                                      %% blow up, no s3 base url
-                                      throw({error, no_s3_base_url});
+                                      %% blow up, no snap_source base url
+                                      throw({error, no_snap_source_base_url});
                                   {true, false, BaseUrl} ->
                                       %% we are looking up the configured blessed
                                       %% height again because the height passed
                                       %% into this function has sometimes been
                                       %% adjusted either +1 or -1
-                                      {ok, ConfigHeight} = application:get_env(blockchain,
-                                                                blessed_snapshot_block_height),
-                                      {ok, Filename} = attempt_fetch_s3_snapshot(BaseUrl,
+                                      {ConfigHeight, ConfigHash} =
+                                          case FetchLatest of
+                                              false ->
+                                                  {ok, BlessedHeight} =
+                                                      application:get_env(blockchain, blessed_snapshot_block_height),
+                                                  {BlessedHeight, Hash};
+                                              true ->
+                                                  fetch_and_parse_latest(BaseUrl)
+                                          end,
+                                      {ok, Filename} = attempt_fetch_snap_source_snapshot(BaseUrl,
                                                                                  ConfigHeight),
                                       lager:info("Successfully saved snap to disk in ~p", [Filename]),
                                       %% if the file doesn't deserialize correctly, it will
                                       %% get deleted, so we can redownload it on some other
                                       %% attempt
-                                      attempt_load_snapshot_from_disk(Filename, Hash, Chain);
+                                      attempt_load_snapshot_from_disk(Filename, ConfigHash, Chain);
                                   _ ->
                                       %% don't do anything
                                       ok
@@ -1085,6 +1094,30 @@ attempt_fetch_p2p_snapshot(Hash, Height, SwarmTID, Chain, Peer) ->
             ok
     end.
 
+fetch_and_parse_latest(URL) ->
+    Headers = [
+               {"user-agent", "blockchain-worker-2"}
+              ],
+    HTTPOptions = [
+                   {timeout, 900000}, % milliseconds, 900 sec overall request timeout
+                   {connect_timeout, 60000} % milliseconds, 60 second connection timeout
+                  ],
+    Options = [
+               {body_format, binary}, % return body as a binary
+               {full_result, false} % do not return the "full result" response as defined in httpc docs
+              ],
+
+    case httpc:request(get, {URL ++ "/latest-snap.json", Headers}, HTTPOptions, Options) of
+        {ok, {200, Latest}} ->
+            #{<<"height">> := Height,
+              <<"hash">> := B64Hash} = jsx:decode(Latest, [{return_maps, true}]),
+            Hash = base64url:decode(B64Hash),
+            {Height, Hash};
+        {ok, {404, _Response}} -> throw({error, url_not_found});
+        {ok, {Status, Response}} -> throw({error, {Status, Response}});
+        Other -> throw(Other)
+    end.
+
 build_filename(Height) ->
     HeightStr = integer_to_list(Height),
     "snap-" ++ HeightStr.
@@ -1092,7 +1125,7 @@ build_filename(Height) ->
 build_url(BaseUrl, Filename) ->
     BaseUrl ++ "/" ++ Filename.
 
-attempt_fetch_s3_snapshot(BaseUrl, Height) ->
+attempt_fetch_snap_source_snapshot(BaseUrl, Height) ->
     %% httpc and ssl applications are started in the top level blockchain supervisor
     BaseDir = application:get_env(blockchain, base_dir, "data"),
     Filename = build_filename(Height),
@@ -1107,10 +1140,10 @@ attempt_fetch_s3_snapshot(BaseUrl, Height) ->
         true ->
             lager:info("Already have snapshot file for height ~p", [Height]),
             {ok, Filepath};
-        false -> do_s3_download(build_url(BaseUrl, Filename), Filepath)
+        false -> do_snap_source_download(build_url(BaseUrl, Filename), Filepath)
     end.
 
-do_s3_download(Url, Filepath) ->
+do_snap_source_download(Url, Filepath) ->
     ScratchFile = Filepath ++ ".scratch",
     ok = filelib:ensure_dir(ScratchFile),
 
