@@ -37,7 +37,7 @@ init_gossip_data([SwarmTID, Blockchain]) ->
             {send, gossip_data_v1(SwarmTID, Block)};
         2 ->
             {ok, Height} = blockchain_ledger_v1:current_height(blockchain:ledger(Blockchain)),
-            {ok, #block_info{hash = Hash}} = blockchain:get_block_info(Height, Blockchain),
+            {ok, #block_info_v2{hash = Hash}} = blockchain:get_block_info(Height, Blockchain),
             lager:debug("gossiping block @ ht: ~p to peers on init", [Height]),
             {send, gossip_data_v2(SwarmTID, Hash, Height)}
     end;
@@ -71,27 +71,34 @@ handle_gossip_data(_StreamPid, Data, [SwarmTID, Blockchain]) ->
                         end
                 end;
             #blockchain_gossip_block_pb{from=From, block=BinBlock} ->
-                Block = blockchain_block:deserialize(BinBlock),
-                case blockchain_block:type(Block) of
-                    undefined ->
-                        lager:notice("gossip_handler unknown block: ~p", [Block]);
-                    _ ->
-                        case blockchain:has_block(Block, Blockchain) of
-                            true ->
-                                %% already got this block, just return
-                                ok;
+                SizeLimit = application:get_env(blockchain, gossip_block_limit_mb, 25) * 1024 * 1024,
+                case byte_size(BinBlock) < SizeLimit of
+                    true ->
+                        Block = blockchain_block:deserialize(BinBlock),
+                        case blockchain_block:type(Block) of
+                            undefined ->
+                                lager:notice("gossip_handler unknown block: ~p", [Block]);
                             _ ->
-                                case blockchain:is_block_plausible(Block, Blockchain) of
+                                case blockchain:has_block(Block, Blockchain) of
                                     true ->
-                                        lager:debug("Got block: ~p from: ~p", [Block, From]),
-                                        %% don't block the gossip server
-                                        spawn(fun() -> add_block(Block, Blockchain, From, SwarmTID) end),
+                                        %% already got this block, just return
                                         ok;
-                                    false ->
-                                        blockchain_worker:maybe_sync(),
-                                        ok
+                                    _ ->
+                                        case blockchain:is_block_plausible(Block, Blockchain) of
+                                            true ->
+                                                lager:debug("Got block: ~p from: ~p", [Block, From]),
+                                                %% don't block the gossip server
+                                                spawn(fun() -> add_block(Block, Blockchain, From, SwarmTID) end),
+                                                ok;
+                                            false ->
+                                                blockchain_worker:maybe_sync(),
+                                                ok
+                                        end
                                 end
-                        end
+                        end;
+                    false ->
+                        lager:warning("block was too big for gossip, skipping"),
+                        ok
                 end
         end
     catch

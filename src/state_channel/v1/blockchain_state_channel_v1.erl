@@ -36,7 +36,7 @@
     compare_causality/2,
     quick_compare_causality/3,
     is_causally_newer/2,
-    merge/3,
+    merge/3, new_merge/3,
     can_fit/3,
     max_actors_allowed/1
 ]).
@@ -499,6 +499,71 @@ merge(SCA, SCB, MaxActorsAllowed) ->
                                 end
                         end
                 end, SC2, summaries(SC1)).
+
+-spec new_merge(
+    SCA :: state_channel(),
+    SCB :: state_channel(),
+    MaxActorsAllowed :: pos_integer()
+) -> state_channel().
+new_merge(SCA, SCB, MaxActorsAllowed) ->
+    [SCA1, SCB2] = lists:sort(fun(A, B) -> ?MODULE:nonce(A) =< ?MODULE:nonce(B) end, [SCA, SCB]),
+    SC1 = lists:keysort(#blockchain_state_channel_summary_v1_pb.client_pubkeybin, summaries(SCA1)),
+    SC2 = lists:keysort(#blockchain_state_channel_summary_v1_pb.client_pubkeybin, summaries(SCB2)),
+
+    Merged = new_merge(SC1, SC2, MaxActorsAllowed, []),
+    MergeLength = length(Merged),
+    TrimmedMerge = case MergeLength > MaxActorsAllowed of
+                       true ->
+                           Overage = MergeLength - MaxActorsAllowed,
+                           %% we need to remove the last Overage actors in SC1 that do not appear in SC1
+                           %% selected in order
+                           UniqueActorsInSC1 = [ X || #blockchain_state_channel_summary_v1_pb{client_pubkeybin=X} <- summaries(SCA1),
+                                                      not lists:keymember(X, #blockchain_state_channel_summary_v1_pb.client_pubkeybin, SC2) ],
+                           ActorsToDrop = lists:sublist(lists:reverse(UniqueActorsInSC1), Overage),
+                           [ E || E=#blockchain_state_channel_summary_v1_pb{client_pubkeybin=Y} <- Merged, not lists:member(Y, ActorsToDrop) ];
+                       false ->
+                           Merged
+                   end,
+    summaries(TrimmedMerge, SCB2).
+
+new_merge([], [], _Max, Acc) ->
+    Acc;
+new_merge([], [B | T], Max, Acc) ->
+    new_merge([], T, Max, [B | Acc]);
+new_merge([A | T], [], Max, Acc) ->
+    new_merge(T, [], Max, [A | Acc]);
+new_merge(
+    [A = #blockchain_state_channel_summary_v1_pb{client_pubkeybin = Actor} | T1],
+    [B = #blockchain_state_channel_summary_v1_pb{client_pubkeybin = Actor} | T2],
+    Max,
+    Acc
+) ->
+    %% same actor, just take the max values
+    Keeper =
+        case
+            blockchain_state_channel_summary_v1:num_dcs(A) >
+                blockchain_state_channel_summary_v1:num_dcs(B)
+        of
+            true ->
+                A;
+            false ->
+                B
+        end,
+    new_merge(T1, T2, Max, [Keeper | Acc]);
+new_merge(
+    [A = #blockchain_state_channel_summary_v1_pb{client_pubkeybin = ActorA} | T1],
+    [_B = #blockchain_state_channel_summary_v1_pb{client_pubkeybin = ActorB} | _] = T2,
+    Max,
+    Acc
+) when ActorA < ActorB andalso length(Acc) =< Max ->
+    new_merge(T1, T2, Max, [A | Acc]);
+new_merge(
+    [_A = #blockchain_state_channel_summary_v1_pb{client_pubkeybin = ActorA} | _] = T1,
+    [B = #blockchain_state_channel_summary_v1_pb{client_pubkeybin = ActorB} | T2],
+    Max,
+    Acc
+) when ActorA > ActorB ->
+    new_merge(T1, T2, Max, [B | Acc]).
 
 -spec can_fit(ClientPubkeyBin :: libp2p_crypto:pubkey_bin(),
               SC :: state_channel(),

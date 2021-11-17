@@ -5,7 +5,7 @@
 -module(blockchain_ledger_v1).
 
 -export([
-    new/1, new/4, new/5, new/6,
+    new/1, new/5, new/6, new/7,
     dir/1,
     mode/1, mode/2,
 
@@ -26,7 +26,7 @@
     new_context/1, new_direct_context/1, delete_context/1, remove_context/1, reset_context/1, commit_context/1,
     get_context/1, context_cache/1,
 
-    get_block/2,
+    get_block/2, get_block_info/2,
 
     new_snapshot/1, context_snapshot/1, has_snapshot/2, release_snapshot/1, snapshot/1,
 
@@ -252,6 +252,7 @@
 -include_lib("helium_proto/include/blockchain_txn_poc_receipts_v1_pb.hrl").
 -include_lib("helium_proto/include/blockchain_txn_rewards_v2_pb.hrl").
 
+
 -ifdef(TEST).
 -export([median/1, checkpoint_base/1, checkpoint_dir/2, clean_checkpoints/1]).
 -endif.
@@ -271,20 +272,20 @@
 
 -spec new(file:filename_all()) -> ledger().
 new(Dir) ->
-    new(Dir, false, undefined, undefined, undefined).
+    new(Dir, false, undefined, undefined, undefined, undefined).
 
--spec new(file:filename_all(), rocksdb:db_handle(), rocksdb:cf_handle(), rocksdb:cf_handle()) -> ledger().
-new(Dir, BlocksDB, BlocksCF, HeightsCF) ->
+-spec new(file:filename_all(), rocksdb:db_handle(), rocksdb:cf_handle(), rocksdb:cf_handle(), rocksdb:cf_handle()) -> ledger().
+new(Dir, BlocksDB, BlocksCF, HeightsCF, InfoCF) ->
     GlobalOpts = application:get_env(rocksdb, global_opts, []),
-    new(Dir, false, BlocksDB, BlocksCF, HeightsCF, GlobalOpts).
+    new(Dir, false, BlocksDB, BlocksCF, HeightsCF, InfoCF, GlobalOpts).
 
--spec new(file:filename_all(), boolean(), rocksdb:db_handle(), rocksdb:cf_handle(), rocksdb:cf_handle()) -> ledger().
-new(Dir, ReadOnly, BlocksDB, BlocksCF, HeightsCF) ->
+-spec new(file:filename_all(), boolean(), rocksdb:db_handle(), rocksdb:cf_handle(), rocksdb:cf_handle(), rocksdb:cf_handle()) -> ledger().
+new(Dir, ReadOnly, BlocksDB, BlocksCF, HeightsCF, InfoCF) ->
     GlobalOpts = application:get_env(rocksdb, global_opts, []),
-    new(Dir, ReadOnly, BlocksDB, BlocksCF, HeightsCF, GlobalOpts).
+    new(Dir, ReadOnly, BlocksDB, BlocksCF, HeightsCF, InfoCF, GlobalOpts).
 
--spec new(file:filename_all(), boolean(), rocksdb:db_handle(), rocksdb:cf_handle(), rocksdb:cf_handle(), rocksdb:cf_options()) -> ledger().
-new(Dir, ReadOnly, BlocksDB, BlocksCF, HeightsCF, Options) ->
+-spec new(file:filename_all(), boolean(), rocksdb:db_handle(), rocksdb:cf_handle(), rocksdb:cf_handle(), rocksdb:cf_handle(), rocksdb:cf_options()) -> ledger().
+new(Dir, ReadOnly, BlocksDB, BlocksCF, HeightsCF, InfoCF, Options) ->
     L = new(Dir, ReadOnly, Options),
 
     %% allow config-set commit hooks in case we're worried about something being racy
@@ -296,6 +297,7 @@ new(Dir, ReadOnly, BlocksDB, BlocksCF, HeightsCF, Options) ->
         blocks_db = BlocksDB,
         blocks_cf = BlocksCF,
         heights_cf = HeightsCF,
+        info_cf = InfoCF,
         commit_hooks = Hooks
     }),
     sweep_old_checkpoints(Ledger),
@@ -748,6 +750,7 @@ has_snapshot(Height, #ledger_v1{snapshots=Cache} = Ledger, Retries) ->
                                                                          blocks_db = Ledger#ledger_v1.blocks_db,
                                                                          blocks_cf = Ledger#ledger_v1.blocks_cf,
                                                                          heights_cf = Ledger#ledger_v1.heights_cf,
+                                                                         info_cf = Ledger#ledger_v1.info_cf,
                                                                          snapshots=Cache}),
                                 %% sanity check
                                 case current_height(NewLedger2) of
@@ -1332,15 +1335,35 @@ config(ConfigName, Ledger) ->
     end.
 
 vars_nonce(Ledger) ->
-    DefaultCF = default_cf(Ledger),
-    case cache_get(Ledger, DefaultCF, ?VARS_NONCE, []) of
-        {ok, Nonce} ->
-            {ok, binary_to_term(Nonce)};
-        not_found ->
-            {error, not_found};
-        Error ->
-            Error
+    case ?MODULE:get_context(Ledger) of
+        undefined ->
+            {ok, Height} = current_height(Ledger),
+            e2qc:cache(
+              ?VAR_CACHE,
+              {vars_nonce, Height},
+              fun() ->
+                      DefaultCF = default_cf(Ledger),
+                      case cache_get(Ledger, DefaultCF, ?VARS_NONCE, []) of
+                          {ok, Nonce} ->
+                              {ok, binary_to_term(Nonce)};
+                          not_found ->
+                              {error, not_found};
+                          Error ->
+                              Error
+                      end
+              end);
+        _ ->
+            DefaultCF = default_cf(Ledger),
+            case cache_get(Ledger, DefaultCF, ?VARS_NONCE, []) of
+                {ok, Nonce} ->
+                    {ok, binary_to_term(Nonce)};
+                not_found ->
+                    {error, not_found};
+                Error ->
+                    Error
+            end
     end.
+
 
 vars_nonce(NewNonce, Ledger) ->
     DefaultCF = default_cf(Ledger),
@@ -2080,9 +2103,8 @@ filtered_gateways_to_refresh(Hash, RefreshInterval, GatewayOffsets, RandN) ->
 maybe_gc_scs(Chain, Ledger) ->
     {ok, Height} = current_height(Ledger),
 
-    case blockchain:get_block(Height, Chain) of
-        {ok, Block} ->
-            {_Epoch, EpochStart} = blockchain_block_v1:election_info(Block),
+    case blockchain:get_block_info(Height, Chain) of
+        {ok, #block_info_v2{election_info={_Epoch, EpochStart}}} ->
             RewardVersion = case ?MODULE:config(?reward_version, Ledger) of
                                 {ok, N} -> N;
                                 _ -> 1
@@ -2394,7 +2416,7 @@ do_maybe_recalc_price(Interval, Blockchain, Ledger) ->
     case CurrentHeight rem Interval == 0 of
         false -> ok;
         true ->
-            {ok, #block_info{time = BlockT}} = blockchain:get_block_info(CurrentHeight, Blockchain),
+            {ok, #block_info_v2{time = BlockT}} = blockchain:get_block_info(CurrentHeight, Blockchain),
             {NewPrice, NewPriceList} = recalc_price(LastPrice, BlockT, DefaultCF, Ledger),
             cache_put(Ledger, DefaultCF, ?ORACLE_PRICES, term_to_binary(NewPriceList)),
             cache_put(Ledger, DefaultCF, ?CURRENT_ORACLE_PRICE, term_to_binary(NewPrice))
@@ -2967,7 +2989,7 @@ redeem_htlc(Address, Payee, Ledger, Chain) ->
                             blockchain:add_htlc_receipt(Address, HTLCReceipt, Chain);
                         false ->
                             ok
-                    end,    
+                    end,
 
                     %% Delete redeemed HTLC from DB
                     HTLCsCF = htlcs_cf(Ledger),
@@ -3405,7 +3427,7 @@ next_oracle_prices(Blockchain, Ledger) ->
 
     LastUpdate = CurrentHeight - (CurrentHeight rem Interval),
 
-    {ok, #block_info{time = BlockT}} = blockchain:get_block_info(LastUpdate, Blockchain),
+    {ok, #block_info_v2{time = BlockT}} = blockchain:get_block_info(LastUpdate, Blockchain),
     {ok, LastPrice} = current_oracle_price(Ledger),
 
     StartScan = BlockT - DelaySecs, % typically 1 hour (in seconds)
@@ -3557,6 +3579,32 @@ get_block(Height, #ledger_v1{blocks_db = DB,
                     end;
                 not_found ->
                     {error, not_found};
+                Error ->
+                    Error
+            end
+    end.
+
+get_block_info(Height, #ledger_v1{blocks_db = DB,
+                                  info_cf = InfoCF} = Ledger) ->
+    case Height > current_height(Ledger) of
+        true -> {error, too_new};
+        _ ->
+            case rocksdb:get(DB, InfoCF, <<Height:64/integer-unsigned-big>>, []) of
+                {ok, BinInfo} ->
+                    case binary_to_term(BinInfo) of
+                        BI = #block_info_v2{} ->
+                            {ok, BI};
+                        _ ->
+                            %% probably a stale one
+                            case get_block(Height, Ledger) of
+                                {ok, Block} ->
+                                    NewInfo = blockchain:mk_block_info(blockchain_block:hash_block(Block), Block),
+                                    rocksdb:put(DB, InfoCF, <<Height:64/integer-unsigned-big>>, term_to_binary(NewInfo), []),
+                                    {ok, NewInfo};
+                                Error ->
+                                    Error
+                            end
+                    end;
                 Error ->
                     Error
             end
