@@ -80,7 +80,7 @@
  {<<"lager">>,{pkg,<<"lager">>,<<"3.9.2">>},0},
  {<<"libp2p">>,
   {git,"https://github.com/ci-work/erlang-libp2p.git",
-       {ref,"70ae6ef8f56c9b88260bf11ce44d2360076a5e44"}},
+       {ref,"7358f831e8b76af7aba8092f3420f05a8253d365"}},
   0},
  {<<"libp2p_crypto">>,{pkg,<<"libp2p_crypto">>,<<"1.4.1">>},1},
  {<<"merkerl">>,
