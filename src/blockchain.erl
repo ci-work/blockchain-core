@@ -556,51 +556,40 @@ ledger_at(Height, Chain0) ->
 
 -spec ledger_at(pos_integer(), blockchain(), boolean()) -> {ok, blockchain_ledger_v1:ledger()} | {error, any()}.
 ledger_at(Height, Chain0, ForceRecalc) ->
-    lager:info("in ledger_at with height ~p", [Height]),
     Ledger0 = ?MODULE:ledger(Chain0),
-    lager:info("got Ledger0"),
     Ledger = case blockchain_ledger_v1:mode(Ledger0) of
         delayed ->
             blockchain_ledger_v1:mode(active, Ledger0);
         _ ->
             Ledger0
     end,
-    lager:info("got Ledger"),
     case blockchain_ledger_v1:current_height(Ledger) of
         {ok, CurrentHeight} when Height > CurrentHeight andalso not ForceRecalc ->
-            lager:info("invalid height"),
             {error, invalid_height};
         {ok, Height} when not ForceRecalc ->
             %% Current height is the height we want, just return a new context
-            lager:info("return new context"),
             {ok, blockchain_ledger_v1:new_context(Ledger)};
         {ok, CurrentHeight} ->
             DelayedLedger = blockchain_ledger_v1:mode(delayed, Ledger),
-            lager:info("DelayedLedger"),
             case blockchain_ledger_v1:current_height(DelayedLedger) of
                 {ok, Height} ->
-                    lager:info("delayed height correct, returning new context"),
                     %% Delayed height is the height we want, just return a new context
                     {ok, blockchain_ledger_v1:new_context(DelayedLedger)};
                 {ok, DelayedHeight} when Height > DelayedHeight andalso Height =< CurrentHeight ->
                     case blockchain_ledger_v1:has_snapshot(Height, DelayedLedger) of
                         {ok, SnapshotLedger} when not ForceRecalc ->
-                            lager:info("SnapshotLedger"),
                             {ok, SnapshotLedger};
                         R ->
                             %% remove a context if we created one we don't need
                             case R of
                                 {ok, UnusedLedger} -> 
-                                    lager:info("UnusedLedger"),
                                     blockchain_ledger_v1:delete_context(UnusedLedger);
                                 _ ->
                                     ok
                             end,
                             case fold_blocks(Chain0, DelayedHeight, DelayedLedger, Height, ForceRecalc) of
                                 {ok, Chain1} ->
-                                    lager:info("fold blocks"),
                                     Ledger1 = ?MODULE:ledger(Chain1),
-                                    lager:info("Ledger1"),
                                     {ok, Ledger1};
                                 Error ->
                                     Error
