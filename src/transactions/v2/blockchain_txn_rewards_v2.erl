@@ -288,21 +288,23 @@ calculate_rewards_(Start, End, Ledger, Chain, ReturnMD) ->
 %% were used as bonus HNT rewards for the consensus members.
 %% @end
 calculate_rewards_metadata(Start, End, Chain) ->
+    lager:info("in calculate_rewards_metadata"),
     {ok, Ledger} = blockchain:ledger_at(End, Chain),
+    lager:info("got ledger"),
     Vars0 = get_reward_vars(Start, End, Ledger),
+    lager:info("got reward vars"),
     VarMap = case blockchain_hex:var_map(Ledger) of
                  {error, _Reason} -> #{};
                  {ok, VM} -> VM
              end,
-
+    lager:info("mapped vars"),
     Vars = Vars0#{ var_map => VarMap },
-
     %% Previously, if a state_channel closed in the grace blocks before an
     %% epoch ended, then it wouldn't ever get rewarded.
     {ok, PreviousGraceBlockDCRewards} = collect_dc_rewards_from_previous_epoch_grace(Start, End,
                                                                                      Chain, Vars,
                                                                                      Ledger),
-
+    lager:info("completed collect_dc_rewards_from_previous_epoch_grace"),
     %% Initialize our reward accumulator. We are going to build up a map which
     %% will be in the shape of
     %% #{ reward_type => #{ Entry => Amount } }
@@ -321,7 +323,7 @@ calculate_rewards_metadata(Start, End, Chain) ->
         %% we are folding, we will abort reward calculation.
         Results0 = fold_blocks_for_rewards(Start, End, Chain,
                                            Vars, Ledger, AccInit),
-
+        lager:info("after fold_blocks_for_rewards"),
         %% Prior to HIP 28 (reward_version <6), force EpochReward amount for the CG to always
         %% be around ElectionInterval (30 blocks) so that there is less incentive
         %% to stay in the consensus group. With HIP 28, relax that to be up to election_interval +
@@ -333,14 +335,16 @@ calculate_rewards_metadata(Start, End, Chain) ->
                 _ ->
                     calculate_epoch_reward(1, Start, End, Ledger)
             end,
-
+        lager:info("after ConsensusEpochReward"),
         Vars1 = Vars#{ consensus_epoch_reward => ConsensusEpochReward },
 
         Results = finalize_reward_calculations(Results0, Ledger, Vars1),
+        lager:info("finalized rewards"),
         %% we are only keeping hex density calculations memoized for a single
         %% rewards transaction calculation, then we discard that work and avoid
         %% cache invalidation issues.
         true = blockchain_hex:destroy_memoization(),
+        lager:info("after destroy_memoization"),
         {ok, Results}
     catch
         C:Error:Stack ->
