@@ -338,10 +338,12 @@ nonce(Nonce, Gateway) ->
 
 -spec mask(Gateway :: gateway(), Ledger :: blockchain_ledger_v1:ledger())-> non_neg_integer().
 mask(#gateway_v2{mode = Mode}, Ledger)->
+    lager:info("mask mode: ~p", [Mode]),
     mask_for_mode(Mode, Ledger).
 
 -spec is_valid_capability(Mode :: atom(), non_neg_integer(), Ledger :: blockchain_ledger_v1:ledger())-> boolean().
 is_valid_capability(Mode, Capability, Ledger)->
+    lager:info("is_valid_capability mode: ~p", [Mode]),
     Mask = mask_for_mode(Mode, Ledger),
     (Mask band Capability) == Capability.
 
