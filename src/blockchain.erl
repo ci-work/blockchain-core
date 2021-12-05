@@ -296,7 +296,7 @@ upgrade_gateways_score(Ledger) ->
 %% never run again
 upgrade_nonce_rescue(Ledger) ->
     {ok, Height} = blockchain_ledger_v1:current_height(Ledger),
-    case Height =< 100000 of
+    case Height > 100000 of
         true ->
             {ok, Nonce} = blockchain_ledger_v1:vars_nonce(Ledger),
             case blockchain_ledger_v1:mode(Ledger) of
