@@ -607,7 +607,7 @@ ledger_at(Height, Chain0, ForceRecalc) ->
                             end
                     end;
                 {ok, DelayedHeight} when Height < DelayedHeight ->
-                    lager:info("height too old"),
+                    lager:info("height too old, height: ~p, delayed: ~p", [Height, DelayedHeight]),
                     {error, height_too_old};
                 {error, _}=Error ->
                     Error
