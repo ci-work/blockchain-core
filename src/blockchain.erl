@@ -316,7 +316,7 @@ upgrade_nonce_rescue(Ledger) ->
                         false ->
                             ok
                     end
-            end
+            end;
         false ->
             ok
   end.
