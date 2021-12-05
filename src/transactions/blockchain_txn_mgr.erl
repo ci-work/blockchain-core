@@ -353,15 +353,16 @@ code_change(_OldVsn, State, _Extra) ->
 -spec initialize_with_chain(#state{}, blockchain:blockchain()) -> #state{}.
 initialize_with_chain(State, Chain)->
     {ok, Height} = blockchain:height(Chain),
+    Ledger = blockchain:ledger(Chain),
+    {ok, LedgerHeight} = blockchain_ledger_v1:current_height(Ledger),
     %% rewrite any cached txn from before we had a chain with the current block height, none of these will have been submitted as yet
     F = fun({TxnKey, Txn, TxnData}) ->
             ok = cache_txn(TxnKey, Txn, TxnData#txn_data{recv_block_height = Height})
         end,
     lists:foreach(F, cached_txns()),
-    case Height > 10000 of
+    case LedgerHeight > 10000 of
         true ->
             %% initialise submit_f and reject_f with current ledger value
-            Ledger = blockchain:ledger(Chain),
             {ok, N} = blockchain:config(?num_consensus_members, Ledger),
             State#state{chain=Chain, cur_block_height = Height, submit_f = submit_f(N), reject_f = reject_f(N)};
         false ->
