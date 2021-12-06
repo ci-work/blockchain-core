@@ -167,7 +167,7 @@ new(Dir, undefined, QuickSyncMode, QuickSyncData) ->
             new(Dir, undefined, QuickSyncMode, QuickSyncData);
         {Blockchain, {error, _Reason}} ->
             lager:info("no genesis block found: ~p", [_Reason]),
-            {no_genesis, init_quick_sync(QuickSyncMode, Blockchain, QuickSyncData)};
+            {no_genesis, Blockchain};
         {Blockchain, {ok, _GenBlock}} ->
             lager:info("stuff is ok"),
             {ok, init_quick_sync(QuickSyncMode, Blockchain, QuickSyncData)}
@@ -178,7 +178,7 @@ new(Dir, GenBlock, QuickSyncMode, QuickSyncData) ->
         {error, {db_open,"Corruption:" ++ _Reason}} ->
             lager:error("DB could not be opened corrupted ~p, cleaning up", [_Reason]),
             ok = clean(Dir),
-            new(Dir, undefined, QuickSyncMode, QuickSyncData);
+            new(Dir, GenBlock, QuickSyncMode, QuickSyncData);
         {Blockchain, {error, {corruption, _Corrupted}}} ->
             lager:error("DB corrupted cleaning up ~p", [_Corrupted]),
             ok = clean(Blockchain),
@@ -296,9 +296,8 @@ upgrade_gateways_score(Ledger) ->
 %% never run again
 upgrade_nonce_rescue(Ledger) ->
     {ok, Height} = blockchain_ledger_v1:current_height(Ledger),
-    case Height > 100000 of
-        true ->
-            {ok, Nonce} = blockchain_ledger_v1:vars_nonce(Ledger),
+    case blockchain_ledger_v1:vars_nonce(Ledger) of
+        {ok, Nonce} ->
             case blockchain_ledger_v1:mode(Ledger) of
                 delayed ->
                     %% note the 4 ------v
@@ -317,9 +316,10 @@ upgrade_nonce_rescue(Ledger) ->
                             ok
                     end
             end;
-        false ->
+        %% starting a new chain, just ignore this
+        {error, not_found} ->
             ok
-  end.
+    end.
 
 -spec get_upgrades(blockchain_ledger_v1:ledger()) -> [binary()].
 get_upgrades(Ledger) ->
