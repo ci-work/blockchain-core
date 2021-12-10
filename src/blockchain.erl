@@ -587,8 +587,7 @@ ledger_at(Height, Chain0, ForceRecalc) ->
                         R ->
                             %% remove a context if we created one we don't need
                             case R of
-                                {ok, UnusedLedger} -> 
-                                    blockchain_ledger_v1:delete_context(UnusedLedger);
+                                {ok, UnusedLedger} -> blockchain_ledger_v1:delete_context(UnusedLedger);
                                 _ ->
                                     ok
                             end,

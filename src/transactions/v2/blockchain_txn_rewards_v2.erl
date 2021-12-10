@@ -289,7 +289,6 @@ calculate_rewards_(Start, End, Ledger, Chain, ReturnMD) ->
 %% @end
 calculate_rewards_metadata(Start, End, Chain) ->
     {ok, Ledger} = blockchain:ledger_at(End, Chain),
-    lager:info("got ledger"),
     Vars0 = get_reward_vars(Start, End, Ledger),
     VarMap = case blockchain_hex:var_map(Ledger) of
                  {error, _Reason} -> #{};
