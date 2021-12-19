@@ -310,7 +310,7 @@ peer_book(_CmdBase, [], [{cnt, _}]) ->
 peer_book(_CmdBase, [], [{count, _}]) ->
     SwarmTID = blockchain_swarm:tid(),
     Peerbook = libp2p_swarm:peerbook(SwarmTID),
-    [clique_status:text(length(libp2p_peerbook:keys(Peerbook)))];
+    [clique_status:text(length(libp2p_peerbook:keys_unfiltered(Peerbook)))];
 peer_book(_CmdBase, [], []) ->
     usage.
 
