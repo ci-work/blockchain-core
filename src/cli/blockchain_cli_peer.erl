@@ -310,7 +310,9 @@ peer_book(_CmdBase, [], [{all, _}]) ->
 peer_book(_CmdBase, [], [{cnt, _}]) ->
     SwarmTID = blockchain_swarm:tid(),
     Peerbook = libp2p_swarm:peerbook(SwarmTID),
-    [clique_status:text(length(libp2p_peerbook:keys_unfiltered(Peerbook)))];
+    PBLen = length(libp2p_peerbook:keys_unfiltered(Peerbook)),
+    lager:info("pb length: ~p", [PBLen]),
+    [clique_status:text(PBLen)];
 peer_book(_CmdBase, [], []) ->
     usage.
 
