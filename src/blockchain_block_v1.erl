@@ -128,6 +128,22 @@ height(Block) ->
 %% @doc
 %% @end
 %%--------------------------------------------------------------------
+-spec election_epoch(block()) -> non_neg_integer().
+election_epoch(Block) ->
+    Block#blockchain_block_v1_pb.election_epoch.
+
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
+-spec epoch_start(block()) -> non_neg_integer().
+epoch_start(Block) ->
+    Block#blockchain_block_v1_pb.epoch_start.
+
+%%--------------------------------------------------------------------
+%% @doc
+%% @end
+%%--------------------------------------------------------------------
 -spec time(block()) -> non_neg_integer().
 time(Block) ->
     Block#blockchain_block_v1_pb.time.
@@ -364,6 +380,8 @@ json_type() ->
 to_json(Block, _Opts) ->
     #{
       height => height(Block),
+      election_epoch => election_epoch(Block),
+      election_start => election_start(Block),
       time => time(Block),
       hash => ?BIN_TO_B64(hash_block(Block)),
       prev_hash => ?BIN_TO_B64(prev_hash(Block)),
