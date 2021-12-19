@@ -311,7 +311,7 @@ peer_book(_CmdBase, [], [{cnt, _}]) ->
     SwarmTID = blockchain_swarm:tid(),
     Peerbook = libp2p_swarm:peerbook(SwarmTID),
     Start = erlang:monotonic_time(millisecond),
-    PBLen = length(libp2p_peerbook:keys_unfiltered(Peerbook)),
+    PBLen = length(libp2p_peerbook:keys(Peerbook)),
     End = erlang:monotonic_time(millisecond),
     [clique_status:text(io_lib:format("peerbook length: ~p, in ~p ms", [PBLen, End-Start]))];
 peer_book(_CmdBase, [], []) ->
