@@ -15,6 +15,8 @@
     rescue/1,
     prev_hash/1,
     height/1,
+    election_epoch/1,
+    epoch_start/1,
     transactions/1,
     signatures/1,
     time/1,
@@ -381,7 +383,7 @@ to_json(Block, _Opts) ->
     #{
       height => height(Block),
       election_epoch => election_epoch(Block),
-      election_start => election_start(Block),
+      epoch_start => epoch_start(Block),
       time => time(Block),
       hash => ?BIN_TO_B64(hash_block(Block)),
       prev_hash => ?BIN_TO_B64(prev_hash(Block)),
