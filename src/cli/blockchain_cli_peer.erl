@@ -303,11 +303,11 @@ peer_book(_CmdBase, [], [{self, _}]) ->
     [format_peers([Peer]),
      format_listen_addrs(SwarmTID, libp2p_peer:listen_addrs(Peer)),
      format_peer_sessions(SwarmTID)];
-peer_book(_CmdBase, [], [{cnt, _}]) ->
+peer_book(_CmdBase, [], [{all, _}]) ->
     SwarmTID = blockchain_swarm:tid(),
     Peerbook = libp2p_swarm:peerbook(SwarmTID),
     [format_peers(libp2p_peerbook:values(Peerbook))];
-peer_book(_CmdBase, [], [{count, _}]) ->
+peer_book(_CmdBase, [], [{cnt, _}]) ->
     SwarmTID = blockchain_swarm:tid(),
     Peerbook = libp2p_swarm:peerbook(SwarmTID),
     [clique_status:text(length(libp2p_peerbook:keys_unfiltered(Peerbook)))];
