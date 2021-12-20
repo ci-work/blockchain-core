@@ -2545,7 +2545,8 @@ delete_temp_blocks(Blockchain=#blockchain{db=DB, temp_blocks=TempBlocksCF, defau
 maybe_continue_resync(Blockchain) ->
     maybe_continue_resync(Blockchain, false).
 
-maybe_continue_resync(Blockchain, Blocking) ->
+maybe_continue_resync(Blockchain, BlockingArg) ->
+    Blocking = application:get_env(blockchain, force_chain_blocking, BlockingArg),
     case {blockchain:height(Blockchain), blockchain_ledger_v1:current_height(blockchain:ledger(Blockchain))} of
         {X, X} ->
             %% they're the same, everything is great
