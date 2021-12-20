@@ -471,11 +471,12 @@ absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
     end.
 
 do_while() ->
-  case application:get_env(blockchain, block_absorb, false), of
+  case application:get_env(blockchain, block_absorb, false) of
     true -> 
-          do_while(),
           lager:info("sleeping..."),
-          timer:sleep(500);
+          timer:sleep(500),
+          do_while(),
+          ok;
     false -> 
           lager:info("unblocked"),
           ok
