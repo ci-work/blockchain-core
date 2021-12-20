@@ -288,6 +288,7 @@ calculate_rewards_(Start, End, Ledger, Chain, ReturnMD) ->
 %% were used as bonus HNT rewards for the consensus members.
 %% @end
 calculate_rewards_metadata(Start, End, Chain) ->
+    application:set_env(blockchain, block_absorb, true),
     {ok, Ledger} = blockchain:ledger_at(End, Chain),
     Vars0 = get_reward_vars(Start, End, Ledger),
     VarMap = case blockchain_hex:var_map(Ledger) of
@@ -340,6 +341,7 @@ calculate_rewards_metadata(Start, End, Chain) ->
         %% rewards transaction calculation, then we discard that work and avoid
         %% cache invalidation issues.
         true = blockchain_hex:destroy_memoization(),
+        application:set_env(blockchain, block_absorb, false),
         {ok, Results}
     catch
         C:Error:Stack ->

@@ -455,6 +455,7 @@ absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
                             End3 = erlang:monotonic_time(millisecond),
                             lager:info("validation took ~p absorb took ~p post took ~p ms for block height ~p",
                                        [End - Start, End2 - End, End3 - End2, Height]),
+                            do_while(),
                             ok;
                         Any ->
                             Any
@@ -468,6 +469,17 @@ absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
             lager:error("found invalid transactions: ~p", [InvalidTxns]),
             {error, invalid_txns}
     end.
+
+do_while() ->
+  case application:get_env(blockchain, block_absorb, false), of
+    true -> 
+          do_while(),
+          lager:info("sleeping..."),
+          timer:sleep(500);
+    false -> 
+          lager:info("unblocked"),
+          ok
+  end.
 
 -spec unvalidated_absorb_and_commit(blockchain_block:block(), blockchain:blockchain(), before_commit_callback(), boolean()) ->
                                ok | {error, any()}.
