@@ -457,7 +457,7 @@ absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
                                        [End - Start, End2 - End, End3 - End2, Height]),
                             case application:get_env(blockchain, force_chain_blocking, false) of
                                 true ->
-                                    force_chain_block(),
+                                    force_chain_block(Height),
                                     ok;
                                 false ->
                                     ok
@@ -476,25 +476,27 @@ absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
             {error, invalid_txns}
     end.
 
-force_chain_block() ->
+force_chain_block(Height) ->
   lager:info("inside force_chain_block"),
-  case application:get_env(blockchain, block_absorb, false) of
-    true -> 
-          lager:info("blocking absorb"),
-          force_chain_block_blocker(),
+  FollowerHeight = application:get_env(blockchain, block_absorb, 0),
+  case FollowerHeight of
+     X when X < Height -> 
+          lager:info("blocking absorb ~p < ~p", [FollowerHeight, Height]),
+          force_chain_block_blocker(Height),
           lager:info("absorb unblocked"),
           ok;
-    false -> 
+    X when X => Height -> 
           ok
   end.
 
-force_chain_block_blocker() ->
-  case application:get_env(blockchain, block_absorb, false) of
-    true -> 
-          timer:sleep(200),
-          force_chain_block_blocker(),
+force_chain_block_blocker(Height) ->
+  FollowerHeight = application:get_env(blockchain, block_absorb, 0),
+  case FollowerHeight of
+    X when X < Height -> 
+          timer:sleep(100),
+          force_chain_block_blocker(Height),
           ok;
-    false ->
+    X when X => Height ->
           ok
   end.
 
@@ -532,7 +534,7 @@ unvalidated_absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
                                        [End - Start, End2 - End, End3 - End2, Height]),
                             case application:get_env(blockchain, force_chain_blocking, false) of
                                 true ->
-                                    force_chain_block(),
+                                    force_chain_block(Height),
                                     ok;
                                 false ->
                                     ok

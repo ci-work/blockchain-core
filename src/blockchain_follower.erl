@@ -86,8 +86,7 @@ handle_info({blockchain_event, {add_block, Hash, Sync, Ledger}},
     {ok, Block} = blockchain:get_block(Hash, Chain),
     MaybePlaybackBlocks =
         fun() ->
-           FollowerHeight = FollowerMod:follower_height(State#state.follower_state),
-           Height = application:get_env(blockchain, force_follower_height, FollowerHeight),
+           Height = FollowerMod:follower_height(State#state.follower_state),
            BlockHeight = blockchain_block:height(Block),
            case BlockHeight of
                X when X == Height + 1 ->
@@ -95,6 +94,7 @@ handle_info({blockchain_event, {add_block, Hash, Sync, Ledger}},
                    {ok, State#state.follower_state};
                X when X =< Height ->
                    lager:info("ignoring block ~p", [BlockHeight]),
+                   application:set_env(blockchain, block_absorb, BlockHeight)
                    %% already have this block
                    {error, already_loaded};
                X when X > Height + 1 ->
