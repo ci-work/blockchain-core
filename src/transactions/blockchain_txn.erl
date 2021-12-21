@@ -484,6 +484,7 @@ force_chain_block() ->
     true -> 
           lager:info("blocking absorb"),
           force_chain_block_blocker(),
+          lager:info("absorb unblocked"),
           ok;
     false -> 
           ok
@@ -496,7 +497,6 @@ force_chain_block_blocker() ->
           force_chain_block_blocker(),
           ok;
     false ->
-          lager:info("absorb unblocked"),
           ok
   end.
 
