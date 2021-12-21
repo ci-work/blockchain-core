@@ -532,6 +532,15 @@ unvalidated_absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
                             End3 = erlang:monotonic_time(millisecond),
                             lager:info("validation took ~p absorb took ~p post took ~p ms height ~p",
                                        [End - Start, End2 - End, End3 - End2, Height]),
+                            case application:get_env(blockchain, force_chain_blocking, false) of
+                                true ->
+                                    lager:info("force_chain_blocking is true"),
+                                    force_chain_block(),
+                                    ok;
+                                false ->
+                                    lager:info("force_chain_blocking is false"),
+                                    ok
+                            end,
                             ok;
                         Any ->
                             Any
