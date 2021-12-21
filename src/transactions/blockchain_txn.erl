@@ -456,8 +456,11 @@ absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
                             lager:info("validation took ~p absorb took ~p post took ~p ms for block height ~p",
                                        [End - Start, End2 - End, End3 - End2, Height]),
                             case application:get_env(blockchain, force_chain_blocking, false) of
-                                true -> force_chain_block();
-                                false -> ok
+                                true -> 
+                                    force_chain_block(),
+                                    ok;
+                                false -> 
+                                    ok
                             end,
                             ok;
                         Any ->
