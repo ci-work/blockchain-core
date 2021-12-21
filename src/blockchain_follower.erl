@@ -94,7 +94,7 @@ handle_info({blockchain_event, {add_block, Hash, Sync, Ledger}},
                    {ok, State#state.follower_state};
                X when X =< Height ->
                    lager:info("ignoring block ~p", [BlockHeight]),
-                   application:set_env(blockchain, block_absorb, BlockHeight)
+                   application:set_env(blockchain, block_absorb, BlockHeight),
                    %% already have this block
                    {error, already_loaded};
                X when X > Height + 1 ->

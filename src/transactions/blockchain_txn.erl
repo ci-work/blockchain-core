@@ -480,7 +480,7 @@ force_chain_block(Height) ->
   lager:info("inside force_chain_block"),
   FollowerHeight = application:get_env(blockchain, block_absorb, 0),
   case FollowerHeight of
-     X when X < Height -> 
+     X when X < Height - 1 -> 
           lager:info("blocking absorb ~p < ~p", [FollowerHeight, Height]),
           force_chain_block_blocker(Height),
           lager:info("absorb unblocked"),
@@ -492,7 +492,7 @@ force_chain_block(Height) ->
 force_chain_block_blocker(Height) ->
   FollowerHeight = application:get_env(blockchain, block_absorb, 0),
   case FollowerHeight of
-    X when X < Height -> 
+    X when X < Height - 1 -> 
           timer:sleep(100),
           force_chain_block_blocker(Height),
           ok;
