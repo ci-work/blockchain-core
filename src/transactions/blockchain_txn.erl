@@ -478,7 +478,7 @@ absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
 
 force_chain_block(Height) ->
   lager:info("inside force_chain_block"),
-  FollowerHeight = application:get_env(blockchain, block_absorb, 0),
+  FollowerHeight = application:get_env(blockchain, block_absorb, Height),
   case FollowerHeight of
      X when X < Height - 1 -> 
           lager:info("blocking absorb ~p < ~p", [FollowerHeight, Height]),
