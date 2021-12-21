@@ -304,6 +304,7 @@ calculate_rewards_metadata(Start, End, Chain) ->
     {ok, PreviousGraceBlockDCRewards} = collect_dc_rewards_from_previous_epoch_grace(Start, End,
                                                                                      Chain, Vars,
                                                                                      Ledger),
+    
     %% Initialize our reward accumulator. We are going to build up a map which
     %% will be in the shape of
     %% #{ reward_type => #{ Entry => Amount } }
@@ -322,6 +323,7 @@ calculate_rewards_metadata(Start, End, Chain) ->
         %% we are folding, we will abort reward calculation.
         Results0 = fold_blocks_for_rewards(Start, End, Chain,
                                            Vars, Ledger, AccInit),
+        
         %% Prior to HIP 28 (reward_version <6), force EpochReward amount for the CG to always
         %% be around ElectionInterval (30 blocks) so that there is less incentive
         %% to stay in the consensus group. With HIP 28, relax that to be up to election_interval +
@@ -333,6 +335,7 @@ calculate_rewards_metadata(Start, End, Chain) ->
                 _ ->
                     calculate_epoch_reward(1, Start, End, Ledger)
             end,
+        
         Vars1 = Vars#{ consensus_epoch_reward => ConsensusEpochReward },
 
         Results = finalize_reward_calculations(Results0, Ledger, Vars1),
