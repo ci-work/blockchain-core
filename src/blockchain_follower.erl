@@ -94,7 +94,6 @@ handle_info({blockchain_event, {add_block, Hash, Sync, Ledger}},
                    {ok, State#state.follower_state};
                X when X =< Height ->
                    lager:info("ignoring block ~p", [BlockHeight]),
-                   application:set_env(blockchain, block_absorb, BlockHeight),
                    %% already have this block
                    {error, already_loaded};
                X when X > Height + 1 ->
@@ -111,8 +110,7 @@ handle_info({blockchain_event, {add_block, Hash, Sync, Ledger}},
                                                                  false ->
                                                                      {ok, undefined}
                                                              end,
-                                       FollowerMod:load_block(MissingHash, MissingBlock, true, MissingLedger, FS),
-                                       application:set_env(blockchain, block_absorb, MissingHeight)
+                                       FollowerMod:load_block(MissingHash, MissingBlock, true, MissingLedger, FS)
                                end, {ok, State#state.follower_state}, BlockHeights)
            end
         end,
@@ -121,10 +119,7 @@ handle_info({blockchain_event, {add_block, Hash, Sync, Ledger}},
         {error, already_loaded} ->
             {noreply, State};
         {ok, FollowerState} ->
-            {ok, NewFollowerState} = 
-                BlockHeight = blockchain_block:height(Block),
-                FollowerMod:load_block(Hash, Block, Sync, Ledger, FollowerState),
-                application:set_env(blockchain, block_absorb, BlockHeight),
+            {ok, NewFollowerState} = FollowerMod:load_block(Hash, Block, Sync, Ledger, FollowerState),
             {noreply, State#state{follower_state=NewFollowerState}}
     end;
 

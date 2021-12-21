@@ -426,6 +426,13 @@ absorb_and_commit(Block, Chain0, BeforeCommit) ->
 -spec absorb_and_commit(blockchain_block:block(), blockchain:blockchain(), before_commit_callback(), boolean()) ->
                                ok | {error, any()}.
 absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
+    case application:get_env(blockchain, force_chain_blocking, false) of
+        true ->
+            force_chain_block(),
+            ok;
+        false ->
+            ok
+    end,
     Ledger0 = blockchain:ledger(Chain0),
     Ledger1 = blockchain_ledger_v1:new_context(Ledger0),
     Chain1 = blockchain:ledger(Ledger1, Chain0),
@@ -455,13 +462,6 @@ absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
                             End3 = erlang:monotonic_time(millisecond),
                             lager:info("validation took ~p absorb took ~p post took ~p ms for block height ~p",
                                        [End - Start, End2 - End, End3 - End2, Height]),
-                            case application:get_env(blockchain, force_chain_blocking, false) of
-                                true ->
-                                    force_chain_block(Height),
-                                    ok;
-                                false ->
-                                    ok
-                            end,
                             ok;
                         Any ->
                             Any
@@ -476,33 +476,38 @@ absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
             {error, invalid_txns}
     end.
 
-force_chain_block(Height) ->
+force_chain_block() ->
   lager:info("inside force_chain_block"),
-  FollowerHeight = application:get_env(blockchain, block_absorb, Height),
-  case FollowerHeight of
-     X when X < Height - 1 -> 
-          lager:info("blocking absorb ~p < ~p", [FollowerHeight, Height]),
-          force_chain_block_blocker(Height),
+  case application:get_env(blockchain, block_absorb, false) of
+    true -> 
+          lager:info("blocking absorb"),
+          force_chain_block_blocker(),
           lager:info("absorb unblocked"),
           ok;
-    X when X >= Height -> 
+    false -> 
           ok
   end.
 
-force_chain_block_blocker(Height) ->
-  FollowerHeight = application:get_env(blockchain, block_absorb, 0),
-  case FollowerHeight of
-    X when X < Height - 1 -> 
-          timer:sleep(100),
-          force_chain_block_blocker(Height),
+force_chain_block_blocker() ->
+  case application:get_env(blockchain, block_absorb, false) of
+    true -> 
+          timer:sleep(200),
+          force_chain_block_blocker(),
           ok;
-    X when X >= Height ->
+    false ->
           ok
   end.
 
 -spec unvalidated_absorb_and_commit(blockchain_block:block(), blockchain:blockchain(), before_commit_callback(), boolean()) ->
                                ok | {error, any()}.
 unvalidated_absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
+    case application:get_env(blockchain, force_chain_blocking, false) of
+        true ->
+            force_chain_block(),
+            ok;
+        false ->
+            ok
+    end,
     Ledger0 = blockchain:ledger(Chain0),
     Ledger1 = blockchain_ledger_v1:new_context(Ledger0),
     Chain1 = blockchain:ledger(Ledger1, Chain0),
@@ -532,13 +537,6 @@ unvalidated_absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
                             End3 = erlang:monotonic_time(millisecond),
                             lager:info("validation took ~p absorb took ~p post took ~p ms height ~p",
                                        [End - Start, End2 - End, End3 - End2, Height]),
-                            case application:get_env(blockchain, force_chain_blocking, false) of
-                                true ->
-                                    force_chain_block(Height),
-                                    ok;
-                                false ->
-                                    ok
-                            end,
                             ok;
                         Any ->
                             Any
