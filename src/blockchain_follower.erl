@@ -111,9 +111,8 @@ handle_info({blockchain_event, {add_block, Hash, Sync, Ledger}},
                                                                  false ->
                                                                      {ok, undefined}
                                                              end,
-                                       application:set_env(blockchain, block_absorb, true),
                                        FollowerMod:load_block(MissingHash, MissingBlock, true, MissingLedger, FS),
-                                       application:set_env(blockchain, block_absorb, false)
+                                       application:set_env(blockchain, block_absorb, MissingHeight)
                                end, {ok, State#state.follower_state}, BlockHeights)
            end
         end,
@@ -123,9 +122,9 @@ handle_info({blockchain_event, {add_block, Hash, Sync, Ledger}},
             {noreply, State};
         {ok, FollowerState} ->
             {ok, NewFollowerState} = 
-                application:set_env(blockchain, block_absorb, true),
+                BlockHeight = blockchain_block:height(Block),
                 FollowerMod:load_block(Hash, Block, Sync, Ledger, FollowerState),
-                application:set_env(blockchain, block_absorb, false),
+                application:set_env(blockchain, block_absorb, BlockHeight),
             {noreply, State#state{follower_state=NewFollowerState}}
     end;
 
