@@ -477,7 +477,6 @@ absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
     end.
 
 force_chain_block() ->
-  lager:info("inside force_chain_block"),
   case application:get_env(blockchain, block_absorb, false) of
     true -> 
           lager:info("blocking absorb"),
