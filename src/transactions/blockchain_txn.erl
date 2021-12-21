@@ -485,7 +485,7 @@ force_chain_block(Height) ->
           force_chain_block_blocker(Height),
           lager:info("absorb unblocked"),
           ok;
-    X when X => Height -> 
+    X when X >= Height -> 
           ok
   end.
 
@@ -496,7 +496,7 @@ force_chain_block_blocker(Height) ->
           timer:sleep(100),
           force_chain_block_blocker(Height),
           ok;
-    X when X => Height ->
+    X when X >= Height ->
           ok
   end.
 
