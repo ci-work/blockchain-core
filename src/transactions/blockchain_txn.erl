@@ -455,7 +455,10 @@ absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
                             End3 = erlang:monotonic_time(millisecond),
                             lager:info("validation took ~p absorb took ~p post took ~p ms for block height ~p",
                                        [End - Start, End2 - End, End3 - End2, Height]),
-                            do_while(),
+                            case application:get_env(blockchain, force_chain_blocking, false) of
+                                true -> force_chain_block();
+                                false -> ok
+                            end,
                             ok;
                         Any ->
                             Any
@@ -470,12 +473,12 @@ absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
             {error, invalid_txns}
     end.
 
-do_while() ->
+force_chain_block() ->
   case application:get_env(blockchain, block_absorb, false) of
     true -> 
           lager:info("sleeping..."),
-          timer:sleep(500),
-          do_while(),
+          timer:sleep(200),
+          force_chain_block(),
           ok;
     false -> 
           lager:info("unblocked"),
