@@ -145,10 +145,12 @@ lookup(Tbl, Key) ->
 
 -spec maybe_precalc(Ledger :: blockchain_ledger_v1:ledger()) -> ok.
 maybe_precalc(Ledger) ->
-    case get(?PRE_UNCLIP_TBL) of
+    case ets:whereis(?PRE_UNCLIP_TBL) of
         undefined ->
             precalc(Ledger);
         _ ->
+            put(?PRE_UNCLIP_TBL, ets:whereis(?PRE_UNCLIP_TBL)),
+            put(?PRE_CLIP_TBL, ets:whereis(?PRE_CLIP_TBL)),
             ok
     end.
 
