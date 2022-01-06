@@ -14,7 +14,7 @@
 -define(PRE_UNCLIP_TBL, '__blockchain_hex_unclipped_tbl').
 -define(PRE_CLIP_TBL, '__blockchain_hex_clipped_tbl').
 
--define(ETS_OPTS, [public,named_table]).
+-define(ETS_OPTS, [public, named_table, {heir, self(), undefined}]).
 
 -type var_map() :: #{0..12 => map()}.
 -export_type([var_map/0]).
