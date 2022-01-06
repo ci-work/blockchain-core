@@ -318,6 +318,10 @@ calculate_rewards_metadata(Start, End, Chain) ->
                  poc_witness => #{} },
 
     try
+        %% discard hex density calculations memoization before reward calc to avoid
+        %% cache invalidation issues.
+        true = blockchain_hex:destroy_memoization(),
+        
         %% We only want to fold over the blocks and transaction in an epoch once,
         %% so we will do that top level work here. If we get a thrown error while
         %% we are folding, we will abort reward calculation.
@@ -339,10 +343,6 @@ calculate_rewards_metadata(Start, End, Chain) ->
         Vars1 = Vars#{ consensus_epoch_reward => ConsensusEpochReward },
 
         Results = finalize_reward_calculations(Results0, Ledger, Vars1),
-        %% we are only keeping hex density calculations memoized for a single
-        %% rewards transaction calculation, then we discard that work and avoid
-        %% cache invalidation issues.
-        true = blockchain_hex:destroy_memoization(),
         {ok, Results}
     catch
         C:Error:Stack ->

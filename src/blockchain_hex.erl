@@ -14,7 +14,7 @@
 -define(PRE_UNCLIP_TBL, '__blockchain_hex_unclipped_tbl').
 -define(PRE_CLIP_TBL, '__blockchain_hex_clipped_tbl').
 
--define(ETS_OPTS, []).
+-define(ETS_OPTS, [public,named_table]).
 
 -type var_map() :: #{0..12 => map()}.
 -export_type([var_map/0]).
@@ -248,7 +248,6 @@ precalc(Testing, Ledger) ->
       InitHexes,
       lists:reverse(UsedResolutions)),  %% go from the bottom here
 
-    lager:info("ets ~p", [get(?PRE_UNCLIP_TBL)]),
     End = erlang:monotonic_time(millisecond),
     lager:info("ets ~p ~p", [ets:info(UnclipETS, size), End-Start]).
 
