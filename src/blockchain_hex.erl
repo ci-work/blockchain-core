@@ -34,6 +34,8 @@
 %% @doc This call will destroy the memoization context used during a rewards
 %% calculation.
 destroy_memoization() ->
+    ets:delete(?PRE_CLIP_TBL),
+    ets:delete(?PRE_UNCLIP_TBL),
     _ = erase(?PRE_CLIP_TBL),
     _ = erase(?PRE_UNCLIP_TBL),
     true.
