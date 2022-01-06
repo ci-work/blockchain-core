@@ -34,11 +34,16 @@
 %% @doc This call will destroy the memoization context used during a rewards
 %% calculation.
 destroy_memoization() ->
-    ets:delete(?PRE_CLIP_TBL),
-    ets:delete(?PRE_UNCLIP_TBL),
-    _ = erase(?PRE_CLIP_TBL),
-    _ = erase(?PRE_UNCLIP_TBL),
-    true.
+    case ets:whereis(?PRE_UNCLIP_TBL) of
+        undefined ->
+            true;
+        _ ->
+          ets:delete(?PRE_CLIP_TBL),
+          ets:delete(?PRE_UNCLIP_TBL),
+          _ = erase(?PRE_CLIP_TBL),
+          _ = erase(?PRE_UNCLIP_TBL),
+          true
+    end.
 
 %% @doc This call is for blockchain_etl to use directly
 -spec scale(Location :: h3:h3_index(),
