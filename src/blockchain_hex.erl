@@ -158,6 +158,7 @@ precalc(Ledger) ->
 
 -spec precalc(boolean(), Ledger :: blockchain_ledger_v1:ledger()) -> ok.
 precalc(Testing, Ledger) ->
+    lager:info("ets generation starting..", []),
     {ok, VarMap} = var_map(Ledger),
     Start = erlang:monotonic_time(millisecond),
     InteractiveBlocks =
@@ -247,6 +248,7 @@ precalc(Testing, Ledger) ->
       InitHexes,
       lists:reverse(UsedResolutions)),  %% go from the bottom here
 
+    lager:info("ets ~p", [get(?PRE_UNCLIP_TBL)]),
     End = erlang:monotonic_time(millisecond),
     lager:info("ets ~p ~p", [ets:info(UnclipETS, size), End-Start]).
 
