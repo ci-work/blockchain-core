@@ -26,7 +26,7 @@
     new_context/1, new_direct_context/1, delete_context/1, remove_context/1, reset_context/1, commit_context/1,
     get_context/1, context_cache/1,
 
-    get_block/2, get_block_info/2,
+    get_block/2, get_raw_block/2, get_block_info/2,
 
     new_snapshot/1, context_snapshot/1, has_snapshot/2, release_snapshot/1, snapshot/1,
 
@@ -265,6 +265,7 @@
 -type htlcs() :: #{libp2p_crypto:pubkey_bin() => blockchain_ledger_htlc_v1:htlc()}.
 -type securities() :: #{libp2p_crypto:pubkey_bin() => blockchain_ledger_security_entry_v1:entry()}.
 -type hexmap() :: #{h3:h3_index() => non_neg_integer()}.
+-type hexlist() :: [{h3:h3_index(), non_neg_integer()}].
 -type gateway_offsets() :: [{pos_integer(), libp2p_crypto:pubkey_bin()}].
 -type state_channel_map() ::  #{blockchain_state_channel_v1:id() =>
                                     blockchain_ledger_state_channel_v1:state_channel()
@@ -3580,27 +3581,45 @@ context_cache(Cache, GwCache, Ledger) ->
 -spec get_block(integer(), ledger()) ->
           {ok, blockchain_block:block()} | {error, any()}.
 get_block(Height, #ledger_v1{blocks_db = DB,
-                             blocks_cf = BlocksCF,
-                             heights_cf = HeightsCF} = Ledger) ->
-    case Height > current_height(Ledger) of
+                             heights_cf = HeightsCF} = Ledger) when is_integer(Height) ->
+    {ok, LedgerHeight} = current_height(Ledger),
+    case Height > LedgerHeight of
         true -> {error, too_new};
         _ ->
             case rocksdb:get(DB, HeightsCF, <<Height:64/integer-unsigned-big>>, []) of
                 {ok, Hash} ->
-                    case rocksdb:get(DB, BlocksCF, Hash, []) of
-                        {ok, BinBlock} ->
-                            {ok, blockchain_block:deserialize(BinBlock)};
-                        not_found ->
-                            {error, not_found};
-                        Error ->
-                            Error
-                    end;
+                    get_block(Hash, Ledger);
                 not_found ->
                     {error, not_found};
                 Error ->
                     Error
             end
+    end;
+get_block(Hash, Ledger) when is_binary(Hash) ->
+    case get_raw_block(Hash, Ledger) of
+        {ok, BinBlock} ->
+            Block = blockchain_block:deserialize(BinBlock),
+            case {ok, blockchain_block:height(Block)} > current_height(Ledger) of
+                true ->
+                    {error, too_new};
+                false ->
+                    {ok, Block}
+            end;
+        Other ->
+            Other
     end.
+
+get_raw_block(Hash, #ledger_v1{blocks_db = DB,
+                               blocks_cf = BlocksCF}) ->
+    case rocksdb:get(DB, BlocksCF, Hash, []) of
+        {ok, BinBlock} ->
+            {ok, BinBlock};
+        not_found ->
+            {error, not_found};
+        Error ->
+            Error
+    end.
+
 
 get_block_info(Height, #ledger_v1{blocks_db = DB,
                                   info_cf = InfoCF} = Ledger) ->
@@ -3986,6 +4005,10 @@ maybe_use_snapshot(#ledger_v1{snapshot=Snapshot}, Options) ->
 -spec set_hexes(HexMap :: hexmap(), Ledger :: ledger()) -> ok | {error, any()}.
 set_hexes(HexMap, Ledger) ->
     HexList = maps:to_list(HexMap),
+    set_hexes_list(HexList, Ledger).
+
+-spec set_hexes_list(HexList :: hexlist(), Ledger :: ledger()) -> ok | {error, any()}.
+set_hexes_list(HexList, Ledger) ->
     L = lists:sort(HexList),
     CF = default_cf(Ledger),
     cache_put(Ledger, CF, ?hex_list, term_to_binary(L, [compressed])).
@@ -4927,23 +4950,23 @@ load_state_channels(SCs, Ledger) ->
 
 -spec snapshot_hexes(ledger()) -> [{non_neg_integer(), [binary()]} | {list, #{non_neg_integer() => pos_integer()}}].
 snapshot_hexes(Ledger) ->
-    case blockchain_ledger_v1:get_hexes(Ledger) of
-        {ok, HexMap} ->
-            lists:sort(
-              maps:to_list(
-                maps:fold(
-                  fun(HexAddr, _Ct, Acc) ->
-                          {ok, Hex} = get_hex(HexAddr, Ledger),
-                          Acc#{HexAddr => Hex}
-                  end,
-                  #{list => HexMap},
-                  HexMap)));
+    case blockchain_ledger_v1:get_hexes_list(Ledger) of
+        {ok, Hexes} ->
+            lists:foldl(
+              fun({HexAddr, _Ct}, Acc) ->
+                      {ok, Hex} = get_hex(HexAddr, Ledger),
+                      [{HexAddr, Hex} | Acc]
+              end,
+              [{list, Hexes}],
+              Hexes);
         {error, not_found} ->
             []
     end.
 
 load_hexes(Hexes0, Ledger) ->
-    lists:foreach(fun({list, Hexes}) ->
+    lists:foreach(fun({list, Hexes}) when is_list(Hexes) ->
+                          ok = set_hexes_list(Hexes, Ledger);
+                     ({list, Hexes}) when is_map(Hexes) ->
                           ok = set_hexes(Hexes, Ledger);
                      ({HexAddr, Hex}) ->
                       set_hex(HexAddr, Hex, Ledger)
