@@ -40,6 +40,8 @@
     do_calculate_dc_amount/2,
     deterministic_subset/3,
     fold_condition_checks/1,
+    get_boolean_os_env_var/2,
+    streaming_file_hash/1,
 
     %% exports for simulations
     free_space_path_loss/4,
@@ -62,7 +64,7 @@
 -define(TRANSMIT_POWER, 28).
 -define(MAX_ANTENNA_GAIN, 6).
 -define(POC_PER_HOP_MAX_WITNESSES, 5).
-
+-define(BLOCK_READ_SIZE, 16*1024). % 16k
 
 -type zone_map() :: #{h3:index() => gateway_score_map()}.
 -type gateway_score_map() :: #{libp2p_crypto:pubkey_bin() => {blockchain_ledger_gateway_v2:gateway(), float()}}.
@@ -607,6 +609,47 @@ do_condition_check(_Conditions, PrevErr, false) -> PrevErr;
 do_condition_check([], _PrevErr, true) -> ok;
 do_condition_check([{Condition, Error}|Tail], _PrevErr, true) ->
     do_condition_check(Tail, Error, Condition()).
+
+%% @doc If this os environment variable is set and is a "truthy" value,
+%% return `true'; otherwise, `false'. Unset variables return the default value.
+%%
+%% False values are "0", "n", "no", "false". Values are converted to lowercase
+%% before deciding if they are truthy or not ("FaLsE" is a false value.)
+%%
+%% True values are any value that isn't listed as explicitly false.
+%% ("1", "tRuE", "yes" and "WOMBAT" are all true values.)
+-spec get_boolean_os_env_var( VarName :: string(), Default :: boolean() ) -> boolean().
+get_boolean_os_env_var(VarName, Default) ->
+    case os:getenv(VarName) of
+        Value when is_list(Value) -> is_truthy(string:lowercase(Value));
+        _ -> Default
+    end.
+
+is_truthy("0") -> false;
+is_truthy("false") -> false;
+is_truthy("no") -> false;
+is_truthy("n") -> false;
+is_truthy(_) -> true.
+
+-spec streaming_file_hash( File :: file:file_name() ) -> {ok, Hash :: binary()} | {error, Reason :: term()}.
+streaming_file_hash(File) ->
+    case file:open(File, [read, raw, binary]) of
+        {ok, FD} ->
+            RetVal = case do_hash(FD, 0, crypto:hash_init(sha256)) of
+                         {error, _E} = Err -> Err;
+                         {ok, HashState} -> {ok, crypto:hash_final(HashState)}
+                     end,
+            file:close(FD),
+            RetVal;
+        {error, _E} = Err -> Err
+    end.
+
+do_hash(FD, Pos, HashState) ->
+    case file:pread(FD, Pos, ?BLOCK_READ_SIZE) of
+        eof -> {ok, HashState};
+        {ok, Data} -> do_hash(FD, Pos + ?BLOCK_READ_SIZE, crypto:hash_update(HashState, Data));
+        {error, _E} = Err -> Err
+    end.
 
 majority(N) ->
     (N div 2) + 1.

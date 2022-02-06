@@ -4,11 +4,10 @@
 %% @end
 %%%-------------------------------------------------------------------
 -module(blockchain_txn_assert_location_v2).
--include_lib("common_test/include/ct.hrl").
 
 -behavior(blockchain_txn).
-
 -behavior(blockchain_json).
+
 -include("blockchain_json.hrl").
 -include("blockchain_txn_fees.hrl").
 -include_lib("helium_proto/include/blockchain_txn_assert_location_v2_pb.hrl").

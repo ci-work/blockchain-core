@@ -132,7 +132,8 @@
                           fun clear_witnesses/1,
                           fun upgrade_gateways_score/1,
                           fun upgrade_gateways_score/1,
-                          fun upgrade_nonce_rescue/1]).
+                          fun upgrade_nonce_rescue/1,
+                          fun blockchain_ledger_v1:upgrade_pocs/1]).
 
 -type blocks() :: #{blockchain_block:hash() => blockchain_block:block()}.
 -type blockchain() :: #blockchain{}.
@@ -846,10 +847,11 @@ upgrade_block_info(#block_info{hash = Hash, height = Height}, Block, Chain = #bl
     deserialize_block_info(InfoBin, Chain).
 
 %% @doc read blocks from the db without deserializing them
--spec get_raw_block(blockchain_block:hash() | integer(), blockchain()) -> {ok, binary()} | not_found | {error, any()}.
-get_raw_block(Hash, #blockchain{db=DB, blocks=BlocksCF}) when is_binary(Hash) ->
+-spec get_raw_block(blockchain_block:hash() | integer(), blockchain()) ->
+    {ok, binary()} | not_found | {error, any()}.
+get_raw_block(<<Hash/binary>>, #blockchain{db=DB, blocks=BlocksCF}) ->
     rocksdb:get(DB, BlocksCF, Hash, []);
-get_raw_block(Height, #blockchain{db=DB, heights=HeightsCF}=Blockchain) ->
+get_raw_block(Height, #blockchain{db=DB, heights=HeightsCF}=Blockchain) when is_integer(Height) ->
     case rocksdb:get(DB, HeightsCF, <<Height:64/integer-unsigned-big>>, []) of
        {ok, Hash} ->
            ?MODULE:get_raw_block(Hash, Blockchain);
@@ -1205,30 +1207,38 @@ process_snapshot(ConsensusHash, MyAddress, Signers,
                     {error, sentinel} ->
                         lager:info("skipping previously failed snapshot at height ~p", [Height]);
                     _ ->
-                        Blocks = blockchain_ledger_snapshot_v1:get_blocks(Blockchain),
-                        Infos = blockchain_ledger_snapshot_v1:get_infos(Blockchain),
-                        case blockchain_ledger_snapshot_v1:snapshot(Ledger, Blocks, Infos) of
-                            {ok, Snap} ->
-                                case blockchain_ledger_snapshot_v1:hash(Snap) of
-                                    ConsensusHash ->
-                                        {ok, _, ConsensusHash} = add_snapshot(Snap, ConsensusHash, Blockchain);
-                                    OtherHash ->
-                                        lager:info("bad snapshot hash: ~p good ~p",
-                                                   [OtherHash, ConsensusHash]),
-                                        case application:get_env(blockchain, save_bad_snapshot, false) of
-                                            true ->
-                                                lager:info("saving bad snapshot ~p", [OtherHash]),
-                                                {ok, _, OtherHash} = add_snapshot(Snap, OtherHash, Blockchain);
-                                            false ->
-                                                ok
-                                        end,
-                                        %% TODO: this is currently called basically for the
-                                        %% logging. it does not reset, or halt
-                                        blockchain_worker:async_reset(Height)
-                                end;
-                            {error, SnapReason} ->
-                                lager:info("error ~p taking snapshot", [SnapReason]),
-                                ok
+                        case blockchain_ledger_snapshot_v1:get_blocks(Blockchain) of
+                            {error, encountered_a_rescue_block} ->
+                                lager:warning(
+                                    "Aborting current snapshot creation attempt: "
+                                    "blocks contain a rescue block. "
+                                    "Will retry later."
+                                );
+                            {ok, Blocks} ->
+                                Infos = blockchain_ledger_snapshot_v1:get_infos(Blockchain),
+                                case blockchain_ledger_snapshot_v1:snapshot(Ledger, Blocks, Infos) of
+                                    {ok, Snap} ->
+                                        case blockchain_ledger_snapshot_v1:hash(Snap) of
+                                            ConsensusHash ->
+                                                {ok, _, ConsensusHash} = add_snapshot(Snap, ConsensusHash, Blockchain);
+                                            OtherHash ->
+                                                lager:info("bad snapshot hash: ~p good ~p",
+                                                           [OtherHash, ConsensusHash]),
+                                                case application:get_env(blockchain, save_bad_snapshot, false) of
+                                                    true ->
+                                                        lager:info("saving bad snapshot ~p", [OtherHash]),
+                                                        {ok, _, OtherHash} = add_snapshot(Snap, OtherHash, Blockchain);
+                                                    false ->
+                                                        ok
+                                                end,
+                                                %% TODO: this is currently called basically for the
+                                                %% logging. it does not reset, or halt
+                                                blockchain_worker:async_reset(Height)
+                                        end;
+                                    {error, SnapReason} ->
+                                        lager:info("error ~p taking snapshot", [SnapReason]),
+                                        ok
+                                end
                         end
                 end
             catch What:Why ->
@@ -2504,21 +2514,8 @@ init_quick_sync(undefined, Blockchain, _Data) ->
     maybe_continue_resync(process_upgrades(Blockchain));
 init_quick_sync(assumed_valid, Blockchain, Data) ->
     init_assumed_valid(process_upgrades(Blockchain), Data);
-init_quick_sync(blessed_snapshot, Blockchain, Data0) ->
+init_quick_sync(blessed_snapshot, Blockchain, Data) ->
     %% don't process upgrades here, check if we need to pull a snap first
-    FetchLatest = application:get_env(blockchain, fetch_latest_from_snap_source, true),
-    Data = case FetchLatest of
-        true ->
-            BaseUrl = application:get_env(blockchain, snap_source_base_url, undefined),
-            try blockchain_worker:fetch_and_parse_latest_snapshot(BaseUrl) of
-                {Height, Hash} ->
-                    %% these are backwards for some reason, so reverse em
-                    {Hash, Height}
-            catch _:_ -> Data0
-            end;
-        _ ->
-            Data0
-    end,
     init_blessed_snapshot(Blockchain, Data).
 
 init_assumed_valid(Blockchain, HashAndHeight={Hash, Height}) when is_binary(Hash), is_integer(Height) ->
@@ -2609,15 +2606,13 @@ init_blessed_snapshot(Blockchain, _HashAndHeight={Hash, Height0}) when is_binary
                                   blockchain:ledger(NewLedger, Blockchain)
                           end;
                         Other ->
-                          lager:warning("failed to deserialize stored snapshot: ~p", [Other]),
-                          blockchain_worker:snapshot_sync(Hash, Height)
+                          lager:warning("failed to deserialize stored snapshot: ~p", [Other])
                   end;
                 {error, not_found} ->
-                  blockchain_worker:snapshot_sync(Hash, Height);
+                    ok;
                Other ->
                   lager:error("Got ~p trying to get snapshot at height: ~p hash ~p - attempt to sync",
-                              [Other, Height0, Hash]),
-                  blockchain_worker:snapshot_sync(Hash, Height)
+                              [Other, Height0, Hash])
             end,
             Blockchain;
         %% no chain at all, we need the genesis block first
