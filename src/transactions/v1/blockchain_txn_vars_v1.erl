@@ -40,7 +40,9 @@
          sign/2,
          print/1,
          json_type/0,
-         to_json/2
+         to_json/2,
+         process_hooks/3,
+         var_hook/3, unset_hook/2
         ]).
 
 %% helper API
@@ -597,6 +599,7 @@ delayed_absorb(Txn, Ledger) ->
     Vars = decode_vars(vars(Txn)),
     Unsets = decode_unsets(unsets(Txn)),
     ok = blockchain_ledger_v1:vars(Vars, Unsets, Ledger),
+    ok = process_hooks(Vars, Unsets, Ledger),
     case blockchain:config(?use_multi_keys, Ledger) of
         {ok, true} ->
             case multi_keys(Txn) of
@@ -668,6 +671,58 @@ to_json(Txn, _Opts) ->
       unsets => unsets(Txn),
       nonce => nonce(Txn)
      }.
+
+-spec process_hooks(Vars :: map(), Unsets :: list(), Ledger :: blockchain_ledger_v1:ledger()) -> ok.
+process_hooks(Vars, Unsets, Ledger) ->
+    _ = maps:map(
+          fun(Var, Value) ->
+                  ?MODULE:var_hook(Var, Value, Ledger)
+          end, Vars),
+    _ = lists:foreach(
+          fun(Var) ->
+                  ?MODULE:unset_hook(Var, Ledger)
+          end, Unsets),
+    ok.
+
+%% Separate out hook functions and call them in separate functions below the hook section.
+
+-spec var_hook(Var :: atom(), Value :: any(), Ledger :: blockchain_ledger_v1:ledger()) -> ok.
+var_hook(?poc_targeting_version, 4, Ledger) ->
+    %% v4 targeting enabled, build the h3dex lookup
+    {ok, Res} = blockchain_ledger_v1:config(?poc_target_hex_parent_res, Ledger),
+    blockchain_ledger_v1:build_random_hex_targeting_lookup(Res, Ledger),
+    ok;
+var_hook(?poc_targeting_version, 3, Ledger) ->
+    %% v3 targeting enabled, remove the h3dex lookup
+    blockchain_ledger_v1:clean_random_hex_targeting_lookup(Ledger),
+    ok;
+var_hook(?poc_target_hex_parent_res, Value, Ledger) ->
+    %% targeting resolution changed, rebuild h3dex lookup
+    blockchain_ledger_v1:clean_random_hex_targeting_lookup(Ledger),
+    blockchain_ledger_v1:build_random_hex_targeting_lookup(Value, Ledger),
+    ok;
+var_hook(?poc_hexing_type, h3dex, Ledger) ->
+    %% the hexes keys should be safe to remove now
+    blockchain_ledger_v1:clean_all_hexes(Ledger),
+    ok;
+var_hook(?poc_hexing_type, hex_h3dex, Ledger) ->
+    %% rebuild hexes since we're back to updating them
+    blockchain:bootstrap_hexes(Ledger),
+    ok;
+var_hook(_Var, _Value, _Ledger) ->
+    ok.
+
+-spec unset_hook(Var :: atom(), Ledger :: blockchain_ledger_v1:ledger()) -> ok.
+unset_hook(?poc_targeting_version, Ledger) ->
+    %% going back to the default, which is v3 so remove the h3dex lookup
+    blockchain_ledger_v1:clean_random_hex_targeting_lookup(Ledger),
+    ok;
+unset_hook(?poc_hexing_type, Ledger) ->
+    %% rebuild hexes since we're back to updating them
+    blockchain:bootstrap_hexes(Ledger),
+    ok;
+unset_hook(_Var, _Ledger) ->
+    ok.
 
 %%%
 %%% Helper API
@@ -948,6 +1003,8 @@ validate_var(?poc_typo_fixes, Value) ->
     end;
 validate_var(?poc_target_hex_parent_res, Value) ->
     validate_int(Value, "poc_target_hex_parent_res", 3, 7, false);
+validate_var(?poc_target_hex_collection_res, Value) ->
+    validate_int(Value, "poc_target_hex_collection_res", 7, 12, false);
 validate_var(?poc_good_bucket_low, Value) ->
     validate_int(Value, "poc_good_bucket_low", -150, -90, false);
 validate_var(?poc_good_bucket_high, Value) ->
@@ -972,6 +1029,25 @@ validate_var(?check_snr, Value) ->
     end;
 validate_var(?polyfill_resolution, Value) ->
     validate_int(Value, "polyfill_resolution", 0, 15, false);
+validate_var(?h3dex_gc_width, Value) ->
+  validate_int(Value, "h3dex_gc_width", 1, 10000, false);
+validate_var(?poc_target_pool_size, Value) ->
+  validate_int(Value, "poc_target_pool_size", 1, 1000000, false);
+validate_var(?poc_targeting_version, Value) ->
+    case Value of
+        3 -> ok;
+        4 -> ok;
+        _ ->
+            throw({error, {invalid_poc_targeting_version, Value}})
+    end;
+validate_var(?poc_hexing_type, Value) ->
+  case Value of
+    hex_h3dex -> ok;
+    h3dex -> ok;
+    hex -> ok;
+    _ ->
+      throw({error, {poc_hexing_type, Value}})
+  end;
 
 %% score vars
 validate_var(?alpha_decay, Value) ->
@@ -1095,6 +1171,8 @@ validate_var(?sc_only_count_open_active, Value) ->
         false -> ok;
         Other -> throw({error, {invalid_sc_only_count_open_active_value, Other}})
     end;
+validate_var(?sc_dispute_strategy_version, Value) ->
+    validate_int(Value, "sc_dispute_strategy_version", 0, 1, false);
 
 %% txn snapshot vars
 validate_var(?snapshot_version, Value) ->

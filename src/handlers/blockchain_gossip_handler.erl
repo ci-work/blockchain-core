@@ -18,7 +18,7 @@
 
 -export([
          init_gossip_data/1,
-         handle_gossip_data/3,
+         handle_gossip_data/5,
          gossip_data_v1/2,
          gossip_data_v2/3,
          regossip_block/2, regossip_block/4
@@ -44,6 +44,10 @@ init_gossip_data([SwarmTID, Blockchain]) ->
 init_gossip_data(WAT) ->
     lager:info("WAT ~p", [WAT]),
     {send, <<>>}.
+
+handle_gossip_data(StreamPid, _Kind, _Peer, {_Path, Data}, Args) ->
+    %% handle libp2p performance branch change in handle gossip data that includes the path
+    handle_gossip_data(StreamPid, Data, Args).
 
 handle_gossip_data(_StreamPid, Data, [SwarmTID, Blockchain]) ->
     try
@@ -188,14 +192,14 @@ add_block(Block, Chain, Sender, SwarmTID) ->
             end
     end.
 
--spec gossip_data_v1(libp2p_swarm:swarm(), blockchain_block:block()) -> binary().
+-spec gossip_data_v1(ets:tid(), blockchain_block:block()) -> binary().
 gossip_data_v1(SwarmTID, Block) ->
     PubKeyBin = libp2p_swarm:pubkey_bin(SwarmTID),
     BinBlock = blockchain_block:serialize(Block),
     Msg = #blockchain_gossip_block_pb{from=PubKeyBin, block=BinBlock},
     blockchain_gossip_handler_pb:encode_msg(Msg).
 
--spec gossip_data_v2(libp2p_swarm:swarm(), binary(), pos_integer()) -> binary().
+-spec gossip_data_v2(ets:tid(), binary(), pos_integer()) -> binary().
 gossip_data_v2(SwarmTID, Hash, Height) ->
     PubKeyBin = libp2p_swarm:pubkey_bin(SwarmTID),
     Msg = #blockchain_gossip_block_pb{from=PubKeyBin, hash=Hash, height=Height},
@@ -222,7 +226,7 @@ regossip_block(Block, Height, Hash, SwarmTID) ->
                 gossip_data_v2(SwarmTID, Hash, Height)
         end,
     libp2p_group_gossip:send(
-      libp2p_swarm:gossip_group(SwarmTID),
+      SwarmTID,
       ?GOSSIP_PROTOCOL_V1,
       Data
      ),

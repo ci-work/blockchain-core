@@ -166,6 +166,22 @@
 
 %% resolution for h3 polyfills, defaulted to 7 before we set it
 -define(polyfill_resolution, polyfill_resolution).
+
+%% determines which hexing type to use for gateways: hex_h3dex | h3dex or not set
+%% hex_h3dex will result in both hexes and h3dex being updated
+%% h3dex will result in only h3dex being updated
+%% not set will result in both hexes and h3dex being updated
+-define(poc_hexing_type, poc_hexing_type).
+
+%% max number of hexes to GC in the h3dex per block: integer
+-define(h3dex_gc_width, h3dex_gc_width).
+
+%% the version number of poc targeting in use: integer
+%% if not set, code paths with default to 3 ( blockchain_poc_target_v3 )
+-define(poc_targeting_version, poc_targeting_version).
+
+%% the number of random hexes to utilize when targeting: integer
+-define(poc_target_pool_size, poc_target_pool_size).
 %%%
 %%% score vars
 %%%
@@ -266,6 +282,9 @@
 %% Hierarchical targeting variables
 %% Create hexes at this resolution for all the hotspots on the network.
 -define(poc_target_hex_parent_res, poc_target_hex_parent_res).
+%% Defines the resolution at which the garbage collection is run, allowing us 
+%% to tune the per-block workload
+-define(poc_target_hex_collection_res, poc_target_hex_collection_res).
 
 %% RSSI Bucketing variables
 %% Weight associated with biasing for RSSI centrality measures
@@ -341,7 +360,10 @@
 %% The "new" behavior (i.e., `true') is to count state channels
 %% that are only in the open state and ignore closed channels.
 -define(sc_only_count_open_active, sc_only_count_open_active).
-
+%% How to handle rewards when a state channel close is disputed.
+%%  - 0 :: reconcile as much as possible
+%%  - 1 :: accept first dispute, drop all DC from opener, no rewards
+-define(sc_dispute_strategy_version, sc_dispute_strategy_version).
 
 %% ------------------------------------------------------------------
 %% snapshot vars

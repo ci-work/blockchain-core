@@ -24,6 +24,7 @@
 
          height/1,
          hash/1,
+         blocks_info/1,
 
          diff/2
         ]).
@@ -380,10 +381,18 @@ serialize_v6(#{version := v6}=Snapshot0, BlocksOrNoBlocks) ->
             noblocks ->
                 EmptyListBin
         end,
+    Infos =
+        case BlocksOrNoBlocks of
+            blocks ->
+                maps:get(infos, Snapshot0, EmptyListBin);
+            noblocks ->
+                EmptyListBin
+        end,
 
     Snapshot1 = maps:put(blocks, Blocks, Snapshot0),
+    Snapshot2 = maps:put(infos, Infos, Snapshot1),
 
-    Pairs = lists:keysort(1, maps:to_list(Snapshot1)),
+    Pairs = lists:keysort(1, maps:to_list(Snapshot2)),
     frame(6, serialize_pairs(Pairs)).
 
 -spec serialize_v5(snapshot_v5(), noblocks) -> binary().
@@ -428,7 +437,7 @@ deserialize(BinOrFile) ->
     | {error, bad_snapshot_hash}
     | {error, bad_snapshot_binary}.
 deserialize(DigestOpt, {file, Filename}) ->
-    {ok, FD} = file:open(Filename, [raw, read, binary]),
+    {ok, FD} = file:open(Filename, [raw, read, binary, compressed]),
     {ok, <<Vsn:8/integer, Siz:32/little-unsigned-integer>>} = file:read(FD, 5),
     case Vsn of
         V when V < 6 ->
@@ -827,10 +836,14 @@ hash(Snap) ->
         v6 ->
             %% attempt to incrementally hash the snapshot without building up a big binary
             Ctx0 = crypto:hash_init(sha256),
-            Size = snapshot_size(Snap#{blocks => <<>>}),
+            Size = snapshot_size(Snap#{blocks => <<>>, infos => <<>>}),
             Ctx1 = crypto:hash_update(Ctx0, <<6, Size:32/integer-unsigned-little>>),
             FinalCtx = lists:foldl(fun({blocks, _}, Acc) ->
                               Key = term_to_binary(blocks),
+                              KeyLen = byte_size(Key),
+                              crypto:hash_update(Acc, <<KeyLen:32/integer-unsigned-little, Key/binary, 0:32/integer-unsigned-little>>);
+                          ({infos, _}, Acc) ->
+                              Key = term_to_binary(infos),
                               KeyLen = byte_size(Key),
                               crypto:hash_update(Acc, <<KeyLen:32/integer-unsigned-little, Key/binary, 0:32/integer-unsigned-little>>);
                           ({version, Version}, Acc) ->
@@ -854,7 +867,7 @@ hash(Snap) ->
                               hash_bytes(TmpCtx, FD, Len)
                       end, Ctx1, lists:keysort(1, maps:to_list(Snap))),
             crypto:hash_final(FinalCtx);
-        _ -> 
+        _ ->
             crypto:hash(sha256, serialize(Snap, noblocks))
     end.
 
@@ -1243,6 +1256,21 @@ kv_stream_to_list(Next0) when is_function(Next0) ->
         ok -> [];
         {K, V, Next1} -> [{K, V} | kv_stream_to_list(Next1)]
     end.
+
+-spec blocks_info(snapshot()) -> {ok, {non_neg_integer(), non_neg_integer(), non_neg_integer()}}.
+blocks_info(Snap) ->
+    BlocksContained = case maps:get(blocks, Snap) of 
+                          BinData = <<131, _/binary>> -> 
+                              binary_to_term(BinData);
+                          {FD, Offset, Size} ->
+                              file:position(FD, Offset),
+                              {ok, BinData} = file:read(FD, Size),
+                              binary_to_term(BinData)
+                      end,
+    NumBlocks = length(BlocksContained),
+    StartBlockHt = blockchain_block:height(blockchain_block:deserialize(hd(BlocksContained))),
+    EndBlockHt = blockchain_block:height(blockchain_block:deserialize(lists:last(BlocksContained))),
+    {ok, {NumBlocks, StartBlockHt, EndBlockHt}}.
 
 diff(#{}=A0, #{}=B0) ->
     A = maps:from_list(

@@ -165,11 +165,10 @@ snapshot_diff(_, _, _) ->
     usage.
 
 snapshot_diff(AFilename, BFilename) ->
-    {ok, ABinSnap} = file:read_file(AFilename),
-    {ok, BBinSnap} = file:read_file(BFilename),
-
-    {ok, A} = blockchain_ledger_snapshot_v1:deserialize(ABinSnap),
-    {ok, B} = blockchain_ledger_snapshot_v1:deserialize(BBinSnap),
+    {ok, ABin} = file:read_file(AFilename),
+    {ok, BBin} = file:read_file(BFilename),
+    {ok, A} = blockchain_ledger_snapshot_v1:deserialize(ABin),
+    {ok, B} = blockchain_ledger_snapshot_v1:deserialize(BBin),
 
     blockchain_ledger_snapshot_v1:diff(A, B).
 
@@ -185,12 +184,8 @@ snapshot_info_usage() ->
     ].
 
 snapshot_info(["snapshot", "info", Filename], [], []) ->
-    {ok, BinSnap} = file:read_file(Filename),
-    {ok, Snap} = blockchain_ledger_snapshot_v1:deserialize(BinSnap),
-    BlocksContained = binary_to_term(maps:get(blocks, Snap)),
-    NumBlocks = length(BlocksContained),
-    StartBlockHt = blockchain_block:height(blockchain_block:deserialize(hd(BlocksContained))),
-    EndBlockHt = blockchain_block:height(blockchain_block:deserialize(lists:last(BlocksContained))),
+    {ok, Snap} = blockchain_ledger_snapshot_v1:deserialize({file, Filename}),
+    {ok, {NumBlocks, StartBlockHt, EndBlockHt}} = blockchain_ledger_snapshot_v1:blocks_info(Snap),
     [clique_status:text(io_lib:format("Height ~p\nNumBlocks ~p\nStartBlockHt ~p\nEndBlockHt ~p\nHash ~p (~p)\n",
                                       [blockchain_ledger_snapshot_v1:height(Snap),
                                        NumBlocks,
