@@ -60,12 +60,13 @@
 
     init_assumed_valid/2,
 
-    add_gateway_txn/2, add_gateway_txn/4,
+    add_gateway_txn/4,
     assert_loc_txn/4, assert_loc_txn/6,
 
     add_snapshot/2, add_bin_snapshot/4,
     have_snapshot/2, get_snapshot/2, find_last_snapshot/1,
     find_last_snapshots/2,
+    save_bin_snapshot/2,  hash_bin_snapshot/1, size_bin_snapshot/1,
 
     add_implicit_burn/3,
     get_implicit_burn/2,
@@ -261,7 +262,7 @@ upgrade_gateways_v2(Ledger) ->
                            Neighbors = blockchain_poc_path:neighbors(A, Gateways, Ledger),
                            blockchain_ledger_gateway_v2:neighbors(Neighbors, G)
                    end,
-              blockchain_ledger_v1:update_gateway(G1, A, Ledger)
+              blockchain_ledger_v1:update_gateway(G, G1, A, Ledger)
       end, Gateways),
     ok.
 
@@ -275,7 +276,7 @@ upgrade_gateways_lg(Ledger) ->
               case blockchain_ledger_gateway_v2:serialize(Gw) of
                   BinGw -> ok;
                   _ ->
-                      blockchain_ledger_v1:update_gateway(Gw, Addr, Ledger)
+                      blockchain_ledger_v1:update_gateway(new, Gw, Addr, Ledger)
               end
       end,
       whatever,
@@ -293,7 +294,7 @@ upgrade_gateways_score(Ledger) ->
                       case blockchain_ledger_gateway_v2:serialize(Gw1) of
                           BinGw -> ok;
                           _ ->
-                              blockchain_ledger_v1:update_gateway(Gw1, Addr, Ledger)
+                              blockchain_ledger_v1:update_gateway(Gw, Gw1, Addr, Ledger)
                       end
               end,
               whatever,
@@ -365,7 +366,7 @@ upgrade_gateways_oui(Ledger) ->
     %% find all neighbors for everyone
     maps:map(
       fun(A, G) ->
-              blockchain_ledger_v1:update_gateway(G, A, Ledger)
+              blockchain_ledger_v1:update_gateway(new, G, A, Ledger)
       end, Gateways),
     ok.
 
@@ -381,7 +382,7 @@ clear_witnesses(Ledger) ->
               case blockchain_ledger_gateway_v2:serialize(Gw2) of
                   BinGw -> ok;
                   _ ->
-                      blockchain_ledger_v1:update_gateway(Gw2, Addr, Ledger)
+                      blockchain_ledger_v1:update_gateway(Gw, Gw2, Addr, Ledger)
               end
       end,
       whatever,
@@ -1967,22 +1968,7 @@ add_bin_snapshot(BinSnap, Height, Hash, #blockchain{db=DB, dir=Dir, snapshots=Sn
         SnapDir = filename:join(Dir, "saved-snaps"),
         SnapFile = list_to_binary(io_lib:format("snap-~s", [blockchain_utils:bin_to_hex(Hash)])),
         OhSnap = filename:join(SnapDir, SnapFile),
-        ok = filelib:ensure_dir(OhSnap),
-        case BinSnap of
-            {file, Filename} ->
-                case filelib:is_regular(OhSnap) of
-                    true ->
-                        ok = file:delete(OhSnap);
-                    false ->
-                        ok
-                end,
-                ok = file:make_link(Filename, OhSnap);
-            B when is_binary(B); is_list(B) ->
-                %% can be a binary or an iolist if it was generated locally
-                %% and we can avoid constructing a large binary by just dumping the
-                %% iolist to disk
-                ok = file:write_file(filename:join(SnapDir, SnapFile), BinSnap)
-        end,
+        ok = save_bin_snapshot(OhSnap, BinSnap),
         {ok, Batch} = rocksdb:batch(),
         %% store the snap as a filename
         ok = rocksdb:batch_put(Batch, SnapshotsCF, Hash, <<"file:", SnapFile/binary>>),
@@ -1993,6 +1979,35 @@ add_bin_snapshot(BinSnap, Height, Hash, #blockchain{db=DB, dir=Dir, snapshots=Sn
             lager:warning("error adding snapshot: ~p:~p, ~p", [What, Why, Stack]),
             {error, Why}
     end.
+
+-spec save_bin_snapshot(file:filename_all(), blockchain_ledger_snapshot:snapshot()) -> 
+    ok | {error, term()}.
+save_bin_snapshot(DestFilename, {file, Filename}) ->
+    ok = filelib:ensure_dir(DestFilename),
+    case filelib:is_regular(DestFilename) of
+        true ->
+            ok = file:delete(DestFilename);
+        false ->
+            ok
+    end,
+    file:make_link(Filename, DestFilename);
+save_bin_snapshot(DestFilename, BinSnap) when is_binary(BinSnap); is_list(BinSnap) ->
+    %% can be a binary or an iolist if it was generated locally
+    %% and we can avoid constructing a large binary by just dumping the
+    %% iolist to disk
+    file:write_file(DestFilename, BinSnap).
+
+-spec hash_bin_snapshot(blockchain_ledger_snapshot:snapshot()) -> {ok, binary()} | {error, term()}.
+hash_bin_snapshot({file, Filename}) ->
+    blockchain_utils:streaming_file_hash(Filename);
+hash_bin_snapshot(BinSnap) when is_binary(BinSnap); is_list(BinSnap) ->
+    {ok, crypto:hash(sha256, BinSnap)}.
+
+-spec size_bin_snapshot(blockchain_ledger_snapshot:snapshot()) -> non_neg_integer().
+size_bin_snapshot({file, Filename}) ->
+    filelib:file_size(Filename);
+size_bin_snapshot(BinSnap) when is_binary(BinSnap); is_list(BinSnap) ->
+    byte_size(BinSnap).
 
 rocksdb_gc(BytesToDrop, #blockchain{db=DB, heights=HeightsCF}=Blockchain) ->
     {ok, Height} = blockchain:height(Blockchain),
@@ -2281,9 +2296,9 @@ load_genesis(Dir) ->
 %% the supplied staking fee will have been derived from the API ( which will have the chain vars )
 -spec add_gateway_txn(OwnerB58::string(),
                       PayerB58::string() | undefined,
-                      Fee::pos_integer(),
-                      StakingFee::non_neg_integer()) -> {ok, binary()}.
-add_gateway_txn(OwnerB58, PayerB58, Fee, StakingFee) ->
+                      Fee::pos_integer() | undefined,
+                      StakingFee::non_neg_integer() | undefined) -> {ok, binary()}.
+add_gateway_txn(OwnerB58, PayerB58, Fee0, StakingFee0) ->
     Owner = libp2p_crypto:b58_to_bin(OwnerB58),
     Payer = case PayerB58 of
                 undefined -> <<>>;
@@ -2293,35 +2308,21 @@ add_gateway_txn(OwnerB58, PayerB58, Fee, StakingFee) ->
     {ok, PubKey, SigFun, _ECDHFun} =  blockchain_swarm:keys(),
     PubKeyBin = libp2p_crypto:pubkey_to_bin(PubKey),
     Txn0 = blockchain_txn_add_gateway_v1:new(Owner, PubKeyBin, Payer),
-    Txn = blockchain_txn_add_gateway_v1:staking_fee(blockchain_txn_add_gateway_v1:fee(Txn0, Fee), StakingFee),
-    SignedTxn = blockchain_txn_add_gateway_v1:sign_request(Txn, SigFun),
-    {ok, blockchain_txn:serialize(SignedTxn)}.
-
-%% @doc Creates a signed add_gatewaytransaction with this blockchain's keys as
-%% the gateway, and the given owner and payer
-%%
-%% NOTE: This is an alternative add_gateway creation that calculates the fee and
-%% staking fee from the current live blockchain.
--spec add_gateway_txn(OwnerB58::string(),
-                      PayerB58::string() | undefined) -> {ok, binary()}.
-add_gateway_txn(OwnerB58, PayerB58) ->
-    Owner = libp2p_crypto:b58_to_bin(OwnerB58),
-    Payer = case PayerB58 of
-                undefined -> <<>>;
-                [] -> <<>>;
-                _ -> libp2p_crypto:b58_to_bin(PayerB58)
-            end,
-    Chain = blockchain_worker:blockchain(),
-    {ok, PubKey, SigFun, _ECDHFun} =  blockchain_swarm:keys(),
-    PubKeyBin = libp2p_crypto:pubkey_to_bin(PubKey),
-    Txn0 = blockchain_txn_add_gateway_v1:new(Owner, PubKeyBin, Payer),
-    StakingFee = blockchain_txn_add_gateway_v1:calculate_staking_fee(Txn0, Chain),
+    StakingFee = case StakingFee0 of 
+        undefined -> 
+            blockchain_txn_add_gateway_v1:calculate_staking_fee(Txn0, blockchain_worker:blockchain());
+        _ -> StakingFee0
+    end,
     Txn1 = blockchain_txn_add_gateway_v1:staking_fee(Txn0, StakingFee),
-    Fee = blockchain_txn_add_gateway_v1:calculate_fee(Txn1, Chain),
-    Txn = blockchain_txn_add_gateway_v1:fee(Txn1, Fee),
-    SignedTxn = blockchain_txn_add_gateway_v1:sign_request(Txn, SigFun),
+    Fee = case Fee0 of
+        undefined -> 
+            blockchain_txn_add_gateway_v1:calculate_fee(Txn1, blockchain_worker:blockchain());
+        _ ->
+            Fee0
+    end,
+    Txn2 = blockchain_txn_add_gateway_v1:fee(Txn1, Fee),
+    SignedTxn = blockchain_txn_add_gateway_v1:sign_request(Txn2, SigFun),
     {ok, blockchain_txn:serialize(SignedTxn)}.
-
 
 %% @doc Creates a signed assert_location transaction using the keys of
 %% this blockchain as the gateway to be asserted for the given
