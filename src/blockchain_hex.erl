@@ -34,6 +34,7 @@
 %% @doc This call will destroy the memoization context used during a rewards
 %% calculation.
 destroy_memoization() ->
+    lager:info("destroy_memoization called took"),
     _ = erase(?PRE_CLIP_TBL),
     _ = erase(?PRE_UNCLIP_TBL),
     true.
@@ -304,4 +305,3 @@ get_target_res(Ledger) ->
         {error, _}=E -> E;
         {ok, V} -> {ok, V}
     end.
-
