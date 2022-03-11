@@ -320,7 +320,11 @@ calculate_rewards_metadata(Start, End, Chain) ->
     try
         %% discard hex density calculations memoization before reward calc to avoid
         %% cache invalidation issues.
-        true = blockchain_hex:destroy_memoization(),
+        case application:get_env(blockchain, destroy_memo, true) of
+            true ->
+                true = blockchain_hex:destroy_memoization();
+            _ -> ok
+        end,
         
         %% We only want to fold over the blocks and transaction in an epoch once,
         %% so we will do that top level work here. If we get a thrown error while
