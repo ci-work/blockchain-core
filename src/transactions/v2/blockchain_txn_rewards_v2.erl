@@ -370,7 +370,7 @@ calculate_rewards_metadata(Start, End, Chain) ->
                     perf_report(PerfTab),
                     ets:delete(PerfTab),
                     ets:insert(?REWARD_METADATA_TBL, {?REWARD_ETS_HEIGHT, End}),
-                    ets:insert(?REWARD_METADATA_TBL, {?REWARD_ETS_DATA, EndResults),
+                    ets:insert(?REWARD_METADATA_TBL, {?REWARD_ETS_DATA, Results}),
                     Results
                 catch
                     C:Error:Stack ->
