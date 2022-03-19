@@ -295,11 +295,9 @@ calculate_rewards_(Start, End, Ledger, Chain, ReturnMD) ->
 calculate_rewards_metadata(Start, End, Chain) ->
     case ets:whereis(?REWARD_METADATA_TBL) of
         undefined ->
-            lager:info("created new ets REWARD_METADATA_TBL"),
             ets:new(?REWARD_METADATA_TBL, ?REWARD_ETS_OPTS),
             ok;
         _ ->
-            lager:info("using existing ets REWARD_METADATA_TBL"),
             ok
     end,
     CacheHeight = case ets:lookup(?REWARD_METADATA_TBL, ?REWARD_ETS_HEIGHT) of
@@ -311,6 +309,7 @@ calculate_rewards_metadata(Start, End, Chain) ->
     lager:info("ets cache height: ~p", [CacheHeight]),
     ResultsMD = case CacheHeight == End of
         false ->
+            lager:info("no reward metadata ets cache for current epoch, creating.."),
             {ok, Ledger} = blockchain:ledger_at(End, Chain),
             Vars0 = get_reward_vars(Start, End, Ledger),
             VarMap = case blockchain_hex:var_map(Ledger) of
@@ -378,6 +377,7 @@ calculate_rewards_metadata(Start, End, Chain) ->
                     Error
             end;
         true -> 
+            lager:info("using existing ets cache for current epoch"),
             ets:lookup(?REWARD_METADATA_TBL, ?REWARD_ETS_DATA)
     end,
     {ok, ResultsMD}.
