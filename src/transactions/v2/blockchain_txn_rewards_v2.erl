@@ -293,7 +293,6 @@ calculate_rewards_(Start, End, Ledger, Chain, ReturnMD) ->
 %% were used as bonus HNT rewards for the consensus members.
 %% @end
 calculate_rewards_metadata(Start, End, Chain) ->
-    lager:info("Start: ~p, End: ~p", [Start, End]),
     case ets:whereis(?REWARD_METADATA_TBL) of
         undefined ->
             lager:info("created new ets REWARD_METADATA_TBL"),
@@ -310,71 +309,79 @@ calculate_rewards_metadata(Start, End, Chain) ->
             ETSHeight
     end,
     lager:info("ets cache height: ~p", [CacheHeight]),
-    {ok, Ledger} = blockchain:ledger_at(End, Chain),
-    Vars0 = get_reward_vars(Start, End, Ledger),
-    VarMap = case blockchain_hex:var_map(Ledger) of
-                 {error, _Reason} -> #{};
-                 {ok, VM} -> VM
-             end,
-
-    RegionVars = blockchain_region_v1:get_all_region_bins(Ledger),
-
-    Vars = Vars0#{ var_map => VarMap, region_vars => RegionVars},
-
-    %% Previously, if a state_channel closed in the grace blocks before an
-    %% epoch ended, then it wouldn't ever get rewarded.
-    {ok, PreviousGraceBlockDCRewards} = collect_dc_rewards_from_previous_epoch_grace(Start, End,
-                                                                                     Chain, Vars,
-                                                                                     Ledger),
-
-    %% Initialize our reward accumulator. We are going to build up a map which
-    %% will be in the shape of
-    %% #{ reward_type => #{ Entry => Amount } }
-    %%
-    %% where Entry is of the the shape
-    %% {owner, reward_type, Owner} or
-    %% {gateway, reward_type, Gateway}
-    AccInit = #{ dc_rewards => PreviousGraceBlockDCRewards,
-                 poc_challenger => #{},
-                 poc_challengee => #{},
-                 poc_witness => #{} },
-
-    try
-        %% discard hex density calculations memoization before reward calc to avoid
-        %% cache invalidation issues.
-        true = blockchain_hex:destroy_memoization(),
-        
-        %% We only want to fold over the blocks and transaction in an epoch once,
-        %% so we will do that top level work here. If we get a thrown error while
-        %% we are folding, we will abort reward calculation.
-        PerfTab = ets:new(rwd_perf, [named_table]),
-        Results0 = fold_blocks_for_rewards(Start, End, Chain,
-                                           Vars, Ledger, AccInit),
-
-        %% Prior to HIP 28 (reward_version <6), force EpochReward amount for the CG to always
-        %% be around ElectionInterval (30 blocks) so that there is less incentive
-        %% to stay in the consensus group. With HIP 28, relax that to be up to election_interval +
-        %% election_retry_interval to allow for time for election to complete.
-        ConsensusEpochReward =
-            case maps:get(reward_version, Vars) of
-               RewardVersion when RewardVersion >= 6 ->
-                    calculate_consensus_epoch_reward(Start, End, Vars, Ledger);
-                _ ->
-                    calculate_epoch_reward(1, Start, End, Ledger)
-            end,
-
-        Vars1 = Vars#{ consensus_epoch_reward => ConsensusEpochReward },
-
-        Results = finalize_reward_calculations(Results0, Ledger, Vars1),
-        perf_report(PerfTab),
-        ets:delete(PerfTab),
-        ets:insert(?REWARD_METADATA_TBL, {?REWARD_ETS_HEIGHT, End}),
-        {ok, Results}
-    catch
-        C:Error:Stack ->
-            lager:error("Caught ~p; couldn't calculate rewards metadata because: ~p~n~p", [C, Error, Stack]),
-            Error
-    end.
+    ResultsMD = case ETSHeight == End of
+        false ->
+                {ok, Ledger} = blockchain:ledger_at(End, Chain),
+                Vars0 = get_reward_vars(Start, End, Ledger),
+                VarMap = case blockchain_hex:var_map(Ledger) of
+                             {error, _Reason} -> #{};
+                             {ok, VM} -> VM
+                         end,
+            
+                RegionVars = blockchain_region_v1:get_all_region_bins(Ledger),
+            
+                Vars = Vars0#{ var_map => VarMap, region_vars => RegionVars},
+            
+                %% Previously, if a state_channel closed in the grace blocks before an
+                %% epoch ended, then it wouldn't ever get rewarded.
+                {ok, PreviousGraceBlockDCRewards} = collect_dc_rewards_from_previous_epoch_grace(Start, End,
+                                                                                                 Chain, Vars,
+                                                                                                 Ledger),
+            
+                %% Initialize our reward accumulator. We are going to build up a map which
+                %% will be in the shape of
+                %% #{ reward_type => #{ Entry => Amount } }
+                %%
+                %% where Entry is of the the shape
+                %% {owner, reward_type, Owner} or
+                %% {gateway, reward_type, Gateway}
+                AccInit = #{ dc_rewards => PreviousGraceBlockDCRewards,
+                             poc_challenger => #{},
+                             poc_challengee => #{},
+                             poc_witness => #{} },
+            
+                try
+                    %% discard hex density calculations memoization before reward calc to avoid
+                    %% cache invalidation issues.
+                    true = blockchain_hex:destroy_memoization(),
+                    
+                    %% We only want to fold over the blocks and transaction in an epoch once,
+                    %% so we will do that top level work here. If we get a thrown error while
+                    %% we are folding, we will abort reward calculation.
+                    PerfTab = ets:new(rwd_perf, [named_table]),
+                    Results0 = fold_blocks_for_rewards(Start, End, Chain,
+                                                       Vars, Ledger, AccInit),
+            
+                    %% Prior to HIP 28 (reward_version <6), force EpochReward amount for the CG to always
+                    %% be around ElectionInterval (30 blocks) so that there is less incentive
+                    %% to stay in the consensus group. With HIP 28, relax that to be up to election_interval +
+                    %% election_retry_interval to allow for time for election to complete.
+                    ConsensusEpochReward =
+                        case maps:get(reward_version, Vars) of
+                           RewardVersion when RewardVersion >= 6 ->
+                                calculate_consensus_epoch_reward(Start, End, Vars, Ledger);
+                            _ ->
+                                calculate_epoch_reward(1, Start, End, Ledger)
+                        end,
+            
+                    Vars1 = Vars#{ consensus_epoch_reward => ConsensusEpochReward },
+            
+                    Results = finalize_reward_calculations(Results0, Ledger, Vars1),
+                    perf_report(PerfTab),
+                    ets:delete(PerfTab),
+                    ets:insert(?REWARD_METADATA_TBL, {?REWARD_ETS_HEIGHT, End}),
+                    ets:insert(?REWARD_METADATA_TBL, {?REWARD_ETS_DATA, EndResults),
+                    Results
+                catch
+                    C:Error:Stack ->
+                        lager:error("Caught ~p; couldn't calculate rewards metadata because: ~p~n~p", [C, Error, Stack]),
+                        Error
+                end;
+            ;
+        true -> 
+            ets:lookup(?REWARD_METADATA_TBL, ?REWARD_ETS_DATA)
+    end,
+    {ok, ResultsMD}.
 
 perf(Tag, Time) ->
     catch ets:update_counter(rwd_perf, Tag, Time, {Tag, Time}).
