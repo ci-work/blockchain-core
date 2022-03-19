@@ -293,6 +293,7 @@ calculate_rewards_(Start, End, Ledger, Chain, ReturnMD) ->
 %% were used as bonus HNT rewards for the consensus members.
 %% @end
 calculate_rewards_metadata(Start, End, Chain) ->
+    lager:info("Start: ~p, End: ~p", [Start, End]),
     case ets:whereis(?REWARD_METADATA_TBL) of
         undefined ->
             lager:info("created new ets REWARD_METADATA_TBL"),
