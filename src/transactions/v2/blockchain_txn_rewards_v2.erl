@@ -309,7 +309,7 @@ calculate_rewards_metadata(Start, End, Chain) ->
             ETSHeight
     end,
     lager:info("ets cache height: ~p", [CacheHeight]),
-    ResultsMD = case ETSHeight == End of
+    ResultsMD = case CacheHeight == End of
         false ->
             {ok, Ledger} = blockchain:ledger_at(End, Chain),
             Vars0 = get_reward_vars(Start, End, Ledger),
