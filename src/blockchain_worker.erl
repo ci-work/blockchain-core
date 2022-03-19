@@ -92,6 +92,7 @@
           etag = undefined :: undefined | string(),
           file_hash = undefined :: undefined | binary(),
           file_size = undefined :: undefined | pos_integer(),
+          is_compressed = false :: boolean(),
           last_success = 0 :: non_neg_integer(), %% posix time of last successful download
           download_attempts = 0 :: non_neg_integer()
          }).
@@ -101,7 +102,6 @@
 -record(state,
         {
          blockchain :: undefined | {no_genesis, blockchain:blockchain()} | blockchain:blockchain(),
-         swarm :: undefined | pid(),
          swarm_tid :: undefined | ets:tab(),
          sync_timer = make_ref() :: reference(),
          sync_ref = make_ref() :: reference(),
@@ -348,7 +348,6 @@ signed_metadata_fun() ->
 %% ------------------------------------------------------------------
 init(Args) ->
     lager:info("~p init with ~p", [?SERVER, Args]),
-    Swarm = blockchain_swarm:swarm(),
     SwarmTID = blockchain_swarm:tid(),
     %% allows the default interface to be to overridden, for example tests work better running with just 127.0.0.1 rather than running on all interfaces
     ListenInterface = application:get_env(blockchain, listen_interface, "0.0.0.0"),
@@ -385,7 +384,7 @@ init(Args) ->
 
     true = lists:all(fun(E) -> E == ok end,
                      [ libp2p_swarm:listen(SwarmTID, Addr) || Addr <- ListenAddrs ]),
-    NewState = #state{swarm = Swarm, swarm_tid = SwarmTID, blockchain = Blockchain,
+    NewState = #state{swarm_tid = SwarmTID, blockchain = Blockchain,
                 gossip_ref = Ref},
     {Mode, Info} = get_sync_mode(NewState),
     SnapshotTimerRef = schedule_snapshot_timer(),
@@ -431,7 +430,7 @@ handle_call({install_snapshot_from_file, Filename}, From, State) ->
     Height = blockchain_ledger_snapshot_v1:height(Snapshot),
     handle_call({install_snapshot, Height, Hash, Snapshot, {file, Filename}}, From, State);
 handle_call({install_snapshot, Height, Hash, Snapshot, BinSnap}, _From,
-            #state{blockchain = Chain, mode = Mode, swarm = Swarm} = State) ->
+            #state{blockchain = Chain, mode = Mode, swarm_tid = SwarmTID} = State) ->
     lager:info("installing snapshot ~p", [Hash]),
     %% I don't think that we want to auto-repair right now, do default
     %% this to disabled.  nothing currently will ever set the mode to
@@ -464,10 +463,10 @@ handle_call({install_snapshot, Height, Hash, Snapshot, BinSnap}, _From,
                     blockchain:bootstrap_h3dex(NewLedger1),
                     blockchain_ledger_v1:commit_context(NewLedger1)
             end,
-            remove_handlers(Swarm),
+            remove_handlers(SwarmTID),
             NewChain = blockchain:delete_temp_blocks(Chain1),
             notify({new_chain, NewChain}),
-            {ok, GossipRef} = add_handlers(Swarm, NewChain),
+            {ok, GossipRef} = add_handlers(SwarmTID, NewChain),
             {ok, LedgerHeight} = blockchain_ledger_v1:current_height(NewLedger),
             {ok, ChainHeight} = blockchain:height(NewChain),
             case LedgerHeight >= ChainHeight of
@@ -485,7 +484,7 @@ handle_call({install_snapshot, Height, Hash, Snapshot, BinSnap}, _From,
         end;
 
 handle_call({install_aux_snapshot, Snapshot}, _From,
-            #state{blockchain = Chain, swarm = Swarm} = State) ->
+            #state{blockchain = Chain, swarm_tid = SwarmTID} = State) ->
     ok = blockchain_lock:acquire(),
     OldLedger = blockchain:ledger(Chain),
     blockchain_ledger_v1:clean_aux(OldLedger),
@@ -493,8 +492,8 @@ handle_call({install_aux_snapshot, Snapshot}, _From,
     blockchain_ledger_snapshot_v1:load_into_ledger(Snapshot, NewLedger, aux),
     blockchain_ledger_snapshot_v1:load_blocks(blockchain_ledger_v1:mode(aux, NewLedger), Chain, Snapshot),
     NewChain = blockchain:ledger(NewLedger, Chain),
-    remove_handlers(Swarm),
-    {ok, GossipRef} = add_handlers(Swarm, NewChain),
+    remove_handlers(SwarmTID),
+    {ok, GossipRef} = add_handlers(SwarmTID, NewChain),
     notify({new_chain, NewChain}),
     blockchain_lock:release(),
     {reply, ok, maybe_sync(State#state{mode = normal, sync_paused = false,
@@ -546,7 +545,7 @@ handle_call(_Msg, _From, State) ->
     {reply, ok, State}.
 
 handle_cast({load, BaseDir, GenDir}, #state{blockchain=undefined}=State) ->
-    {Blockchain, Ref} = load_chain(State#state.swarm, BaseDir, GenDir),
+    {Blockchain, Ref} = load_chain(State#state.swarm_tid, BaseDir, GenDir),
     {Mode, Info} = get_sync_mode(State#state{blockchain=Blockchain, gossip_ref=Ref}),
     NewState = State#state{blockchain = Blockchain, gossip_ref = Ref, mode=Mode, snapshot_info=Info},
     notify({new_chain, Blockchain}),
@@ -628,6 +627,7 @@ handle_info({'DOWN', SyncRef, process, _SyncPid, normal},
     %% Schedule a sync "as usual" in "normal" mode
     lager:info("snapshot process completed normally; switching to normal sync mode."),
     {noreply, schedule_sync(State#state{mode=normal,
+                       sync_pid = undefined,
                        snapshot_info = SnapInfo#snapshot_info{
                                          download_attempts = 0,
                                          last_success = erlang:system_time(seconds) }})};
@@ -645,7 +645,7 @@ handle_info({'DOWN', SyncRef, process, _SyncPid, Reason},
             #state{sync_ref = SyncRef, mode = snapshot,
                    snapshot_info = #snapshot_info{ download_attempts = Attempts } = SnapInfo} = State) when Attempts >= ?MAX_ATTEMPTS ->
     lager:warning("Snapshot attempt ~p exited with: ~p; will retry again in a while...", [Attempts, Reason]),
-    {noreply, schedule_sync(State#state{mode = normal, snapshot_info=SnapInfo#snapshot_info{ download_attempts = 0 }})};
+    {noreply, schedule_sync(State#state{mode = normal, sync_pid = undefined, snapshot_info=SnapInfo#snapshot_info{ download_attempts = 0 }})};
 
 %% "normal" sync mode handling...
 handle_info({'DOWN', SyncRef, process, _SyncPid, Reason},
@@ -1149,8 +1149,9 @@ fetch_and_parse_latest_snapshot(SnapInfo0) ->
             SnapInfo
     end.
 
+-spec get_latest_snap_data( URL :: string(), snapshot_info() ) -> no_return().
 get_latest_snap_data(URL, SnapInfo) ->
-    ReqHeaders0 = [{"user-agent", "blockchain-worker-3"}],
+    ReqHeaders0 = [{"user-agent", "snapjson-3"}],
     Etag = case SnapInfo of
                #snapshot_info{etag=undefined} -> undefined;
                #snapshot_info{etag=Etag0} -> Etag0;
@@ -1158,14 +1159,14 @@ get_latest_snap_data(URL, SnapInfo) ->
            end,
     ReqHeaders = case Etag of
                   undefined -> ReqHeaders0;
-                  _ -> [ {"if-none-match", "\"" ++ Etag ++ "\""} | ReqHeaders0 ]
+                  _ -> [ {<<"if-none-match">>, list_to_binary("\"" ++ Etag ++ "\"")} | ReqHeaders0 ]
                end,
     %% shorter timeouts here because we're hitting S3 usually...
-    HTTPOptions = [{timeout, 30000}, % milliseconds, 30 sec overall request timeout
-                   {connect_timeout, 10000}], % milliseconds, 10 second connection timeout
-    Options = [{body_format, binary}], % return body as a binary
-    case httpc:request(get, {URL ++ "/latest-snap.json", ReqHeaders}, HTTPOptions, Options) of
-        {ok, {{_HTTPVer, 200, _Msg}, RespHeaders, Body}} ->
+    Options = [{recv_timeout, 30000}, % milliseconds, 30 sec overall request timeout
+               {connect_timeout, 10000}, % milliseconds, 10 second connection timeout
+               with_body],
+    case hackney:request(get, URL ++ "/latest-snap.json", ReqHeaders, <<>>, Options) of
+        {ok, 200, RespHeaders, Body} ->
             Data = #{<<"height">> := Height,
               <<"hash">> := B64Hash} = jsx:decode(Body, [{return_maps, true}]),
             Hash = base64url:decode(B64Hash),
@@ -1177,16 +1178,31 @@ get_latest_snap_data(URL, SnapInfo) ->
                                 undefined -> undefined;
                                 Sz -> Sz
                             end,
+            MaybeCompressedSize = case maps:get(<<"compressed_size">>, Data, undefined) of
+                                      undefined -> undefined;
+                                      CSz -> CSz
+                                  end,
+            MaybeCompressedHash = case maps:get(<<"compressed_hash">>, Data, undefined) of
+                                      undefined -> undefined;
+                                      B64CHash -> base64url:decode(B64CHash)
+                                  end,
             NewEtag = get_etag(RespHeaders),
-            lager:debug("new latest-json data: previous etag: ~p; height: ~p, internal snapshot hash: ~p, file hash: ~p, file size: ~p, new etag: ~p",
-                        [Etag, Height, B64Hash, MaybeFileHash, MaybeFileSize, NewEtag]),
-            SnapInfo#snapshot_info{height=Height, hash=Hash, file_hash=MaybeFileHash, file_size=MaybeFileSize, etag=NewEtag};
-        {ok, {{_HTTPVer, 304, _Msg}, _RespHeaders, _Body}} ->
+            lager:debug("new latest-json data: previous etag: ~p; height: ~p, internal snapshot hash: ~p, file hash: ~p, file size: ~p, compressed size: ~p, compressed hash: ~p, new etag: ~p",
+                        [Etag, Height, B64Hash, MaybeFileHash, MaybeFileSize,
+                         MaybeCompressedSize, MaybeCompressedHash, NewEtag]),
+            {IsCompressed, FHash, FSz} = case MaybeCompressedHash of
+                               undefined -> {false, MaybeFileHash, MaybeFileSize};
+                               _ -> {true, MaybeCompressedHash, MaybeCompressedSize}
+                           end,
+            SnapInfo#snapshot_info{height=Height, hash=Hash,
+                                   file_hash=FHash, file_size=FSz,
+                                   is_compressed=IsCompressed, etag=NewEtag};
+        {ok, 304, _RespHeaders, _Body} ->
             lager:debug("Got 304 from ~p; latest-snap.json has not been modified", [URL]),
             SnapInfo;
-        {ok, {{_HTTPVer, 403, _Msg}, _RespHeaders, _Body}} -> throw({error, url_forbidden});
-        {ok, {{_HTTPVer, 404, _Msg}, _RespHeaders, _Body}} -> throw({error, url_not_found});
-        {ok, {{_HTTPVer, Status, _Msg}, _RespHeaders, Body}} -> throw({error, {Status, Body}});
+        {ok, 403, _RespHeaders, _Body} -> throw({error, url_forbidden});
+        {ok, 404, _RespHeaders, _Body} -> throw({error, url_not_found});
+        {ok, Status, _RespHeaders, Body} -> throw({error, {Status, Body}});
         Other -> throw(Other)
     end.
 
@@ -1203,14 +1219,21 @@ build_filename(Height) ->
 build_url(BaseUrl, Filename) ->
     BaseUrl ++ "/" ++ Filename.
 
-attempt_fetch_snap_source_snapshot(BaseUrl, #snapshot_info{height=Height, file_size = Size,
-                                                           file_hash = Hash}) ->
+set_filename(BaseFilename, true) ->
+    BaseFilename ++ ".gz";
+set_filename(BaseFilename, false) ->
+    BaseFilename.
+
+attempt_fetch_snap_source_snapshot(BaseUrl, #snapshot_info{height = Height, file_hash = Hash,
+                                                           file_size = Size, is_compressed = IsCompressed}) ->
     %% httpc and ssl applications are started in the top level blockchain supervisor
+    Filename = set_filename(build_filename(Height), IsCompressed),
+    HashFilename = Filename ++ ".hash",
     BaseDir = application:get_env(blockchain, base_dir, "data"),
-    Filename = build_filename(Height),
     Filepath = filename:join([BaseDir, "snap", Filename]),
-    HashStateFile = filename:join([BaseDir, "snap", Filename ++ ".hash"]),
     ok = filelib:ensure_dir(Filepath),
+
+    HashStateFile = filename:join([BaseDir, "snap", HashFilename]),
 
     %% clean_dir will remove files older than 1 week (help prevent
     %% filling up the SSD card with old files/snapshots)
@@ -1231,20 +1254,23 @@ attempt_fetch_snap_source_snapshot(BaseUrl, #snapshot_info{height=Height, file_s
                     lager:info("Already have snapshot file for height ~p with hash ~p", [Height, Hash]),
                     {ok, Filepath};
                 false ->
-                    case has_same_file_size(Filepath, Size)
-                            andalso is_file_hash_valid(Filepath, Hash) of
-                        true ->
+                    case {has_same_file_size(Filepath, Size),
+                          is_file_hash_valid(Filepath, Hash)} of
+                        {true, true} ->
                             lager:info("Already have snapshot file for height ~p with hash ~p", [Height, Hash]),
                             ok = file:write_file(HashStateFile, Hash),
                             {ok, Filepath};
-                        false ->
-                            ok = safe_delete(Filename),
-                            do_snap_source_download(build_url(BaseUrl, Filename), Filepath)
+                        {smaller, _} ->
+                            %% see if this is a a resumable download
+                            _ = do_snap_source_download(build_url(BaseUrl, Filename), Filepath);
+                        _ ->
+                            %% file is bigger than it should be, or the hash is wrong, scrap it
+                            safe_delete(Filename),
+                            _ = do_snap_source_download(build_url(BaseUrl, Filename), Filepath)
                     end
             end;
         false ->
-            ok = safe_delete(Filename),
-            do_snap_source_download(build_url(BaseUrl, Filename), Filepath)
+            _ = do_snap_source_download(build_url(BaseUrl, Filename), Filepath)
     end.
 
 same_stored_hash(File, Hash) ->
@@ -1257,7 +1283,8 @@ has_same_file_size(_Filepath, undefined) -> false;
 has_same_file_size(Filepath, Size) ->
     case file:read_file_info(Filepath, [raw, {time, posix}]) of
         {ok, #file_info{ size = Size }} -> true;
-        _ -> false
+        {ok, #file_info{ size = FSize }} when FSize < Size  -> smaller;
+        {ok, #file_info{ size = FSize }} when FSize > Size  -> larger
     end.
 
 is_file_hash_valid(_Filepath, undefined) -> false;
@@ -1279,38 +1306,59 @@ safe_delete(File) ->
         Other -> Other
     end.
 
+-spec do_snap_source_download(URL :: string(), Filepath :: file:filename_all()) -> no_return().
 do_snap_source_download(Url, Filepath) ->
     ScratchFile = Filepath ++ ".scratch",
     ok = filelib:ensure_dir(ScratchFile),
 
-    %% make sure our scratch directory is empty if there are any
-    %% old partial failure nuggets hanging out
-    ok = delete_dir(ScratchFile),
-
     Headers = [
-               {"user-agent", "blockchain-worker-2"}
+               {"user-agent", "snapdownload-3"}
               ],
-    HTTPOptions = [
-                   {timeout, 900000}, % milliseconds, 900 sec overall request timeout
-                   {connect_timeout, 60000} % milliseconds, 60 second connection timeout
-                  ],
     Options = [
-               {body_format, binary}, % return body as a binary
-               {stream, ScratchFile}, % write data into file
-               {full_result, false} % do not return the "full result" response as defined in httpc docs
-              ],
-
+                   {recv_timeout, 900000}, % milliseconds, 900 sec overall request timeout
+                   {connect_timeout, 60000}, % milliseconds, 60 second connection timeout,
+                   async
+                  ],
     lager:info("Attempting snapshot download from ~p, writing to scratch file ~p",
                [Url, ScratchFile]),
-    case httpc:request(get, {Url, Headers}, HTTPOptions, Options) of
-        {ok, saved_to_file} ->
-            lager:info("snap written to scratch file ~p", [ScratchFile]),
-            %% prof assures me rename is atomic :)
-            ok = file:rename(ScratchFile, Filepath),
-            {ok, Filepath};
-        {ok, {403, _Response}} -> throw({error, url_forbidden});
-        {ok, {404, _Response}} -> throw({error, url_not_found});
-        {ok, {Status, Response}} -> throw({error, {Status, Response}});
+
+    %% check if we have a partial download
+    Start = case file:read_file_info(ScratchFile) of
+                {ok, #file_info{size=Size}} ->
+                    lager:info("resuming snapshot download at byte ~p", [Size]),
+                    Size;
+                _ ->
+                    0
+            end,
+    {ok, FD} = file:open(ScratchFile, [raw, write, append]),
+    ReceiveSnapshotLoop = fun Loop(Ref) ->
+                                  receive
+                                      {hackney_response, Ref, {status, 200, _}} ->
+                                          Loop(Ref);
+                                      {hackney_response, Ref, {status, 206, _}} ->
+                                          Loop(Ref);
+                                      {hackney_response, Ref, {status, 403, _}} ->
+                                          throw({error, url_forbidden});
+                                      {hackney_response, Ref, {status, 403, _}} ->
+                                          throw({error, url_not_found});
+                                      {hackney_response, Ref, {status, Status, Response}} ->
+                                          throw({error, {Status, Response}});
+                                      {hackney_response, Ref, {headers, _Headers}} ->
+                                          Loop(Ref);
+                                      {hackney_response, Ref, done} ->
+                                          file:close(FD),
+                                          lager:info("snap written to scratch file ~p", [ScratchFile]),
+                                          %% prof assures me rename is atomic :)
+                                          ok = file:rename(ScratchFile, Filepath),
+                                          {ok, Filepath};
+                                      {hackney_response, Ref, Bin} ->
+                                          file:write(FD, Bin),
+                                          Loop(Ref)
+                                  end
+                          end,
+    case hackney:request(get, Url, Headers ++ [{<<"range">>, list_to_binary("bytes=" ++ integer_to_list(Start) ++ "-")}], <<>>, Options) of
+        {ok, ClientRef} ->
+            ReceiveSnapshotLoop(ClientRef);
         Other -> throw(Other)
     end.
 
@@ -1366,6 +1414,7 @@ get_blessed_snapshot_height_and_hash() ->
             {undefined, undefined}
     end.
 
+-spec get_quick_sync_height_and_hash(assumed_valid | blessed_snapshot) -> undefined | {blockchain_block:hash(),pos_integer()}.
 get_quick_sync_height_and_hash(Mode) ->
 
     HashHeight =
@@ -1373,7 +1422,8 @@ get_quick_sync_height_and_hash(Mode) ->
             assumed_valid ->
                 get_assumed_valid_height_and_hash();
             blessed_snapshot ->
-                fetch_and_parse_latest_snapshot(undefined)
+                #snapshot_info{hash=BlessedHash, height=BlessedHeight} = fetch_and_parse_latest_snapshot(undefined),
+                {BlessedHash, BlessedHeight}
         end,
 
     case HashHeight of
@@ -1469,14 +1519,6 @@ get_sync_mode(State) ->
             {normal, undefined}
     end.
 
-delete_dir(Filename) ->
-    Dir = case filelib:is_dir(Filename) of
-              true -> Filename;
-              false -> filename:dirname(Filename)
-          end,
-
-    do_clean_dir(get_files_to_delete(Dir), fun(_) -> true end).
-
 get_files_to_delete(Dir) ->
     case file:list_dir(Dir) of
         {error, enoent} -> [];
@@ -1487,15 +1529,11 @@ get_files_to_delete(Dir) ->
 clean_dir(Dir) ->
     WeekOld = erlang:system_time(seconds) - ?WEEK_OLD_SECONDS,
     FilterFun = fun(F) ->
-                        case filename:extension(F) of
-                            ".scratch" -> true;
-                            _ ->
-                                case file:read_file_info(F, [raw, {time, posix}]) of
-                                    {error, _} -> false;
-                                    {ok, FI} ->
-                                        FI#file_info.type == regular
-                                        andalso FI#file_info.mtime =< WeekOld
-                                end
+                        case file:read_file_info(F, [raw, {time, posix}]) of
+                            {error, _} -> false;
+                            {ok, FI} ->
+                                FI#file_info.type == regular
+                                andalso FI#file_info.mtime =< WeekOld
                         end
                 end,
 
