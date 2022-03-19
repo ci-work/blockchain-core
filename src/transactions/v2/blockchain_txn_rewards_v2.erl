@@ -49,6 +49,11 @@
 -export([v1_to_v2/1]).
 -endif.
 
+-define(REWARD_METADATA_TBL, '__reward_metadata_tbl').
+-define(REWARD_ETS_HEIGHT, 'data_height').
+-define(REWARD_ETS_DATA, 'data_cache').
+-define(REWARD_ETS_OPTS, [set, public, named_table, {heir, blockchain_swarm:swarm(), undefined}]).
+
 -type txn_rewards_v2() :: #blockchain_txn_rewards_v2_pb{}.
 -type reward_v2() :: #blockchain_txn_reward_v2_pb{}.
 -type rewards() :: [reward_v2()].
@@ -288,6 +293,22 @@ calculate_rewards_(Start, End, Ledger, Chain, ReturnMD) ->
 %% were used as bonus HNT rewards for the consensus members.
 %% @end
 calculate_rewards_metadata(Start, End, Chain) ->
+    case ets:whereis(?REWARD_METADATA_TBL) of
+        undefined ->
+            lager:info("created new ets REWARD_METADATA_TBL"),
+            ets:new(?REWARD_METADATA_TBL, ?REWARD_ETS_OPTS),
+            ok;
+        _ ->
+            lager:info("using existing ets REWARD_METADATA_TBL"),
+            ok
+    end,
+    CacheHeight = case ets:lookup(?REWARD_METADATA_TBL, ?REWARD_ETS_HEIGHT) of
+        [] ->
+            0;
+        [{?REWARD_ETS_HEIGHT, ETSHeight}] ->
+            ETSHeight
+    end,
+    lager:info("ets cache height: ~p", [CacheHeight]),
     {ok, Ledger} = blockchain:ledger_at(End, Chain),
     Vars0 = get_reward_vars(Start, End, Ledger),
     VarMap = case blockchain_hex:var_map(Ledger) of
@@ -346,6 +367,7 @@ calculate_rewards_metadata(Start, End, Chain) ->
         Results = finalize_reward_calculations(Results0, Ledger, Vars1),
         perf_report(PerfTab),
         ets:delete(PerfTab),
+        ets:insert(?REWARD_METADATA_TBL, {?REWARD_ETS_HEIGHT, End}),
         {ok, Results}
     catch
         C:Error:Stack ->
