@@ -14,7 +14,7 @@
 -define(PRE_UNCLIP_TBL, '__blockchain_hex_unclipped_tbl').
 -define(PRE_CLIP_TBL, '__blockchain_hex_clipped_tbl').
 
--define(ETS_OPTS, [public, named_table, {heir, blockchain_swarm:swarm(), undefined}]).
+-define(ETS_OPTS, []).
 
 -type var_map() :: #{0..12 => map()}.
 -export_type([var_map/0]).
@@ -34,16 +34,9 @@
 %% @doc This call will destroy the memoization context used during a rewards
 %% calculation.
 destroy_memoization() ->
-    case ets:whereis(?PRE_UNCLIP_TBL) of
-        undefined ->
-            true;
-        _ ->
-          ets:delete(?PRE_CLIP_TBL),
-          ets:delete(?PRE_UNCLIP_TBL),
-          _ = erase(?PRE_CLIP_TBL),
-          _ = erase(?PRE_UNCLIP_TBL),
-          true
-    end.
+    _ = erase(?PRE_CLIP_TBL),
+    _ = erase(?PRE_UNCLIP_TBL),
+    true.
 
 %% @doc This call is for blockchain_etl to use directly
 -spec scale(Location :: h3:h3_index(),
@@ -152,12 +145,10 @@ lookup(Tbl, Key) ->
 
 -spec maybe_precalc(Ledger :: blockchain_ledger_v1:ledger()) -> ok.
 maybe_precalc(Ledger) ->
-    case ets:whereis(?PRE_UNCLIP_TBL) of
+    case get(?PRE_UNCLIP_TBL) of
         undefined ->
             precalc(Ledger);
         _ ->
-            put(?PRE_UNCLIP_TBL, ets:whereis(?PRE_UNCLIP_TBL)),
-            put(?PRE_CLIP_TBL, ets:whereis(?PRE_CLIP_TBL)),
             ok
     end.
 

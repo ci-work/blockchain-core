@@ -426,13 +426,6 @@ absorb_and_commit(Block, Chain0, BeforeCommit) ->
 -spec absorb_and_commit(blockchain_block:block(), blockchain:blockchain(), before_commit_callback(), boolean()) ->
                                ok | {error, any()}.
 absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
-    case application:get_env(blockchain, force_chain_blocking, false) of
-        true ->
-            force_chain_block(),
-            ok;
-        false ->
-            ok
-    end,
     Ledger0 = blockchain:ledger(Chain0),
     Ledger1 = blockchain_ledger_v1:new_context(Ledger0),
     Chain1 = blockchain:ledger(Ledger1, Chain0),
@@ -477,37 +470,9 @@ absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
             {error, invalid_txns}
     end.
 
-force_chain_block() ->
-  case application:get_env(blockchain, block_absorb, false) of
-    true -> 
-          lager:info("blocking absorb"),
-          force_chain_block_blocker(),
-          lager:info("absorb unblocked"),
-          ok;
-    false -> 
-          ok
-  end.
-
-force_chain_block_blocker() ->
-  case application:get_env(blockchain, block_absorb, false) of
-    true -> 
-          timer:sleep(200),
-          force_chain_block_blocker(),
-          ok;
-    false ->
-          ok
-  end.
-
 -spec unvalidated_absorb_and_commit(blockchain_block:block(), blockchain:blockchain(), before_commit_callback(), boolean()) ->
                                ok | {error, any()}.
 unvalidated_absorb_and_commit(Block, Chain0, BeforeCommit, Rescue) ->
-    case application:get_env(blockchain, force_chain_blocking, false) of
-        true ->
-            force_chain_block(),
-            ok;
-        false ->
-            ok
-    end,
     Ledger0 = blockchain:ledger(Chain0),
     Ledger1 = blockchain_ledger_v1:new_context(Ledger0),
     Chain1 = blockchain:ledger(Ledger1, Chain0),
