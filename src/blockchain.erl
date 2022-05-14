@@ -66,8 +66,7 @@
     add_snapshot/2, add_bin_snapshot/4,
     have_snapshot/2, get_snapshot/2, find_last_snapshot/1,
     find_last_snapshots/2,
-    save_bin_snapshots/2,
-    save_bin_snapshot/2,  hash_bin_snapshot/1, size_bin_snapshot/1,
+    hash_bin_snapshot/1, size_bin_snapshot/1,
     save_compressed_bin_snapshot/2, maybe_get_compressed_snapdata/1,
 
     add_implicit_burn/3,
@@ -405,7 +404,7 @@ bootstrap_h3dex(Ledger) ->
 %%--------------------------------------------------------------------
 integrate_genesis(GenesisBlock, #blockchain{db=DB, default=DefaultCF}=Blockchain) ->
     GenHash = blockchain_block:hash_block(GenesisBlock),
-    ok = blockchain_txn:absorb_and_commit(GenesisBlock, Blockchain, fun(_, _) ->
+    {ok, _} = blockchain_txn:absorb_and_commit(GenesisBlock, Blockchain, fun(_, _) ->
         {ok, Batch} = rocksdb:batch(),
         ok = save_block(GenesisBlock, Batch, Blockchain),
         GenBin = blockchain_block:serialize(GenesisBlock),
@@ -649,7 +648,7 @@ fold_blocks(Chain0, DelayedHeight, DelayedLedger, Height, ForceRecalc) ->
               case ?MODULE:get_block(H, Chain0) of
                   {ok, Block} ->
                       case blockchain_txn:absorb_block(Block, ChainAcc) of
-                          {ok, Chain1} ->
+                          {ok, Chain1, _} ->
                               {ok, H} = blockchain_ledger_v1:current_height(blockchain:ledger(Chain1)),
                               ok = run_gc_hooks(ChainAcc, Block),
 
@@ -1167,8 +1166,8 @@ add_block_(Block, Blockchain, Syncing) ->
                                     ok
                             end,
                             Error;
-                        ok ->
-                            run_absorb_block_hooks(Syncing, Hash, Blockchain)
+                        {ok, KeysPayload} ->
+                            run_absorb_block_hooks(Syncing, Hash, Blockchain, KeysPayload)
                     end;
                 plausible ->
                     %% regossip plausible blocks
@@ -1265,8 +1264,8 @@ replay_blocks(Chain, Syncing, LedgerHeight, ChainHeight) ->
               case blockchain_txn:Fun(B, Chain,
                                       fun(FChain, _FHash) -> ok = run_gc_hooks(FChain, B) end,
                                       blockchain_block:is_rescue_block(B)) of
-                  ok ->
-                      run_absorb_block_hooks(Syncing, Hash, Chain);
+                  {ok, KeysPayload} ->
+                      run_absorb_block_hooks(Syncing, Hash, Chain, KeysPayload);
                   {error, Reason} ->
                       lager:error("Error absorbing transaction, "
                                   "Ignoring Hash: ~p, Reason: ~p",
@@ -1364,8 +1363,8 @@ absorb_temp_blocks_fun_([BlockHash|Chain], Blockchain, Syncing) ->
         {error, Reason}=Error ->
             lager:error("Error absorbing transaction, Ignoring Hash: ~p, Reason: ~p", [blockchain_block:hash_block(Block), Reason]),
             Error;
-        ok ->
-            run_absorb_block_hooks(Syncing, Hash, Blockchain),
+        {ok, KeysPayload} ->
+            run_absorb_block_hooks(Syncing, Hash, Blockchain, KeysPayload),
             absorb_temp_blocks_fun_(Chain, Blockchain, Syncing)
     end.
 
@@ -1615,15 +1614,15 @@ reset_ledger(Height,
                                              end,
                               case Revalidate of
                                   false ->
-                                      ok = blockchain_txn:unvalidated_absorb_and_commit(Block, CAcc, BeforeCommit,
+                                      {ok, KeysPayload} = blockchain_txn:unvalidated_absorb_and_commit(Block, CAcc, BeforeCommit,
                                                                                         blockchain_block:is_rescue_block(Block));
                                   true ->
-                                      ok = blockchain_txn:absorb_and_commit(Block, CAcc, BeforeCommit,
+                                      {ok, KeysPayload} = blockchain_txn:absorb_and_commit(Block, CAcc, BeforeCommit,
                                                                             blockchain_block:is_rescue_block(Block))
                               end,
                               Hash = blockchain_block:hash_block(Block),
                               %% can only get here if the absorb suceeded
-                              run_absorb_block_hooks(true, Hash, CAcc),
+                              run_absorb_block_hooks(true, Hash, CAcc, KeysPayload),
                               CAcc;
                           _ ->
                               lager:warning("couldn't absorb block at ~p", [H]),
@@ -1973,11 +1972,11 @@ add_bin_snapshot(BinSnap, Height, Hash, #blockchain{db=DB, dir=Dir, snapshots=Sn
         SnapDir = filename:join(Dir, "saved-snaps"),
         SnapFile = io_lib:format("snap-~s", [blockchain_utils:bin_to_hex(Hash)]),
         OhSnap = filename:join(SnapDir, SnapFile),
-        ok = save_bin_snapshots(OhSnap, BinSnap),
+        {ok, CompressedSnapFile} = save_compressed_bin_snapshot(OhSnap, BinSnap),
         {ok, Batch} = rocksdb:batch(),
         %% store the snap as a filename, which might be wrong if compressed
         ok = rocksdb:batch_put(Batch, SnapshotsCF, Hash,
-                               <<"file:", (iolist_to_binary(SnapFile))/binary>>),
+                               <<"file:", (iolist_to_binary(CompressedSnapFile))/binary>>),
         %% lexiographic ordering works better with big endian
         ok = rocksdb:batch_put(Batch, SnapshotsCF, <<Height:64/integer-unsigned-big>>, Hash),
         ok = rocksdb:write_batch(DB, Batch, [])
@@ -1986,61 +1985,18 @@ add_bin_snapshot(BinSnap, Height, Hash, #blockchain{db=DB, dir=Dir, snapshots=Sn
             {error, Why}
     end.
 
--spec save_bin_snapshots(file:filename_all(), blockchain_ledger_snapshot:snapshot()) ->
-    ok | {error, term()}.
+-spec save_compressed_bin_snapshot(file:filename_all(), blockchain_ledger_snapshot:snapshot()) ->
+   {ok, Filename} | {error, Error :: term()} when Filename :: file:filename_all().
 %% @doc This function saves a binary snapshot, compressing the image based on
-%% the setting of the erlang environment variable `snapshot_compression_mode'
-%% valid values of which may be `compressed' (default), `uncompressed' or `both'.
+%% the zlib compression library.
 %%
-%% Compressed snapshots will be saved to the destination with a ".gz" extension
+%% Snapshots will be saved to the destination with a ".gz" extension
 %% automatically appended.
 %%
 %% The return error tuple return value contains a list, the values of which may
 %% or may not themselves also be error tuples.
 %%
 %% This is the preferred function to store snapshots to disk.
-save_bin_snapshots(DestFilename, SnapshotData) ->
-   SaveFuns = case application:get_env(blockchain, snapshot_compression_mode, compressed) of
-                 compressed ->
-                    [ fun save_compressed_bin_snapshot/2 ];
-                 uncompressed ->
-                    [ fun save_bin_snapshot/2 ];
-                 both ->
-                    [ fun save_compressed_bin_snapshot/2, fun save_bin_snapshot/2 ]
-              end,
-
-   Results = lists:map(fun(SaveFunc) ->
-                               SaveFunc(DestFilename, SnapshotData)
-                       end, SaveFuns),
-
-   case lists:all(
-          fun(ok) -> true;
-             (_) -> false
-          end, Results) of
-      true -> ok;
-      false -> {error, Results}
-   end.
-
--spec save_bin_snapshot(file:filename_all(), blockchain_ledger_snapshot:snapshot()) ->
-    ok | {error, term()}.
-save_bin_snapshot(DestFilename, {file, Filename}) ->
-    ok = filelib:ensure_dir(DestFilename),
-    case filelib:is_regular(DestFilename) of
-        true ->
-            ok = file:delete(DestFilename);
-        false ->
-            ok
-    end,
-    file:make_link(Filename, DestFilename);
-save_bin_snapshot(DestFilename, BinSnap) when is_binary(BinSnap); is_list(BinSnap) ->
-    %% can be a binary or an iolist if it was generated locally
-    %% and we can avoid constructing a large binary by just dumping the
-    %% iolist to disk
-    ok = filelib:ensure_dir(DestFilename),
-    file:write_file(DestFilename, BinSnap).
-
--spec save_compressed_bin_snapshot(file:filename_all(), blockchain_ledger_snapshot:snapshot()) ->
-   ok | {error, Error :: term()}.
 save_compressed_bin_snapshot(DestFilename, {file, Filename}) ->
    ok = filelib:ensure_dir(DestFilename),
    CompressedFile = DestFilename ++ ".gz",
@@ -2049,7 +2005,7 @@ save_compressed_bin_snapshot(DestFilename, {file, Filename}) ->
    {ok, In} = file:open(Filename, [raw, read, binary, compressed]),
    {ok, Out} = file:open(CompressedFile, [raw, write, binary]),
    RetVal = case do_compress(In, Out, Z) of
-               ok -> ok;
+               ok -> {ok, CompressedFile};
                {error, _E} = Err -> Err
             end,
    file:close(In),
@@ -2071,7 +2027,7 @@ save_compressed_bin_snapshot(DestFilename, BinSnap) ->
          end,
    RetVal = blockchain_utils:streaming_transform_iolist(BinSnap, Fun),
    file:close(Out),
-   RetVal.
+   {RetVal, CompressedFile}.
 
 do_compress(In, Out, Z) ->
    case file:read(In, ?BLOCK_READ_SIZE) of
@@ -2150,13 +2106,24 @@ do_rocksdb_gc(Bytes, Itr, #blockchain{dir=Dir, db=DB, heights=HeightsCF, blocks=
                     %% check if the snap is on disk
                     SnapDir = filename:join(Dir, "saved-snaps"),
                     SnapPath = filename:join(SnapDir, SnapFile),
-                    case file:read_file_info(SnapPath) of
-                        {ok, #file_info{size=Size}} ->
-                            file:delete(SnapPath),
-                            Size;
-                        _ ->
-                            0
-                    end;
+                    CompSnapBytes =
+                        case file:read_file_info(SnapPath) of
+                            {ok, #file_info{size=Size}} ->
+                                file:delete(SnapPath),
+                                Size;
+                            _ -> 0
+                        end,
+                    %% uncompressed paths are no longer generated but check to see if an old
+                    %% one is still on disk and clean it up
+                    UncompressedPath = string:trim(SnapPath, trailing, ".gz"),
+                    UncompSnapBytes =
+                        case file:read_file_info(UncompressedPath) of
+                            {ok, #file_info{size=UncompSize}} ->
+                                file:delete(UncompressedPath),
+                                UncompSize;
+                            _ -> 0
+                        end,
+                    CompSnapBytes + UncompSnapBytes;
                 {ok, Snap} ->
                     %% snap was in rocksdb
                     byte_size(Snap);
@@ -2784,7 +2751,7 @@ resync_fun(ChainHeight, LedgerHeight, Blockchain) ->
         {error, _} when LedgerHeight == 0 ->
             %% reload the genesis block
             {ok, GenesisBlock} = blockchain:genesis_block(Blockchain),
-            ok = blockchain_txn:unvalidated_absorb_and_commit(GenesisBlock, Blockchain, fun(_, _) -> ok end, false),
+            {ok, _} = blockchain_txn:unvalidated_absorb_and_commit(GenesisBlock, Blockchain, fun(_, _) -> ok end, false),
             {ok, GenesisHash} = blockchain:genesis_hash(Blockchain),
             ok = blockchain_worker:notify({integrate_genesis_block, GenesisHash}),
             case blockchain_ledger_v1:new_snapshot(blockchain:ledger(Blockchain)) of
@@ -2831,11 +2798,11 @@ resync_fun(ChainHeight, LedgerHeight, Blockchain) ->
                                               lager:info("absorbing block ~p", [blockchain_block:height(Block)]),
                                               case application:get_env(blockchain, force_resync_validation, false) of
                                                   true ->
-                                                      ok = blockchain_txn:absorb_and_commit(Block, Blockchain, BeforeCommit, blockchain_block:is_rescue_block(Block));
+                                                      {ok, KeysPayload} = blockchain_txn:absorb_and_commit(Block, Blockchain, BeforeCommit, blockchain_block:is_rescue_block(Block));
                                                   false ->
-                                                      ok = blockchain_txn:unvalidated_absorb_and_commit(Block, Blockchain, BeforeCommit, blockchain_block:is_rescue_block(Block))
+                                                      {ok, KeysPayload} = blockchain_txn:unvalidated_absorb_and_commit(Block, Blockchain, BeforeCommit, blockchain_block:is_rescue_block(Block))
                                               end,
-                                              run_absorb_block_hooks(true, Hash, Blockchain)
+                                              run_absorb_block_hooks(true, Hash, Blockchain, KeysPayload)
                                       end, HashChain)
                     after
                         blockchain_lock:release()
@@ -3077,13 +3044,19 @@ run_gc_hooks(Blockchain, _Block) ->
             {error, gc_hooks_failed}
     end.
 
-run_absorb_block_hooks(Syncing, Hash, Blockchain) ->
+run_absorb_block_hooks(Syncing, Hash, Blockchain, KeysPayload) ->
     Ledger = blockchain:ledger(Blockchain),
     case blockchain_ledger_v1:new_snapshot(Ledger) of
         {error, Reason}=Error ->
             lager:error("Error creating snapshot, Reason: ~p", [Reason]),
             Error;
         {ok, NewLedger} ->
+            case KeysPayload of
+                none -> ok;
+                {BlockHeight, BlockHash, POCSubset} ->
+                    ok = blockchain_worker:notify({poc_keys, {BlockHeight, BlockHash,
+                                                              POCSubset, NewLedger}})
+            end,
             case application:get_env(blockchain, test_mode, false) of
                 false ->
                     ok = blockchain_worker:notify({add_block, Hash, Syncing, NewLedger});
