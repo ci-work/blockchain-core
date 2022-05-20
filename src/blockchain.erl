@@ -2010,6 +2010,7 @@ save_compressed_bin_snapshot(DestFilename, {file, Filename}) ->
             end,
    file:close(In),
    file:close(Out),
+   zlib:close(Z),
    RetVal;
 save_compressed_bin_snapshot(DestFilename, BinSnap) ->
    ok = filelib:ensure_dir(DestFilename),
@@ -2027,6 +2028,7 @@ save_compressed_bin_snapshot(DestFilename, BinSnap) ->
          end,
    RetVal = blockchain_utils:streaming_transform_iolist(BinSnap, Fun),
    file:close(Out),
+   zlib:close(Z),
    {RetVal, CompressedFile}.
 
 do_compress(In, Out, Z) ->
