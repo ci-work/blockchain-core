@@ -92,7 +92,7 @@
  {<<"lager">>,{pkg,<<"lager">>,<<"3.9.2">>},0},
  {<<"libp2p">>,
   {git,"https://github.com/ci-work/erlang-libp2p.git",
-       {ref,"4fd8bdb0595163837529812ddd5336b52386f85f"}},
+       {ref,"aaee35b6803ad506a794a24ed18c078c456edfe9"}},
   0},
  {<<"libp2p_crypto">>,
   {git,"https://github.com/helium/libp2p-crypto.git",
