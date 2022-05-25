@@ -1219,8 +1219,7 @@ poc_witness_reward(Txn, AccIn,
                         ValidWitnesses =
                             case get({KeyHash, ElemHash}) of
                                 undefined ->
-                                    VW = TxnType:valid_witnesses(Elem, WitnessChannel,
-                                                                                        RegionVars, Ledger),
+                                    VW = TxnType:valid_witnesses(Elem, WitnessChannel, RegionVars, Ledger),
                                     put({KeyHash, ElemHash}, VW),
                                     VW;
                                 VW -> VW

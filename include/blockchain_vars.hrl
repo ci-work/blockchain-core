@@ -226,6 +226,9 @@
 %% the number of random hexes to utilize when targeting: integer
 -define(poc_target_pool_size, poc_target_pool_size).
 
+%% whether or not to process validation of poc receipt witnesses
+-define(poc_receipt_witness_validation, poc_receipt_witness_validation).
+
 %%%
 %%% score vars
 %%%
@@ -357,6 +360,9 @@
 
 %% Set this var to false to disable zero amount txns (payment_v1, payment_v2, htlc_create)
 -define(allow_zero_amount, allow_zero_amount).
+
+%% Set this var to `true' to enable balance clearing txns
+-define(enable_balance_clearing, enable_balance_clearing). % boolean
 
 %% General txn vars
 
