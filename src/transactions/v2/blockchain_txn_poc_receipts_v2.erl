@@ -336,13 +336,7 @@ poc_particpants(Txn, Chain) ->
                                     _ ->
                                         {lists:nth(ElementPos - 1, Path), lists:nth(ElementPos - 1, Channels), lists:nth(ElementPos, Channels)}
                                 end,
-                            Witnesses = case blockchain:config(?poc_receipt_witness_validation, Ledger) of
-                                            {ok, false} ->
-                                                UnvalidatedWitnesses = lists:reverse(blockchain_poc_path_element_v1:witnesses(Element)),
-                                                [W#blockchain_poc_witness_v1_pb.gateway || W <- UnvalidatedWitnesses];
-                                            _ ->
-                                                valid_witness_addrs(Element, WitnessChannel, Ledger)
-                                        end,
+                            Witnesses = valid_witness_addrs(Element, WitnessChannel, Ledger),
                             %% only include the challengee in the poc participants list
                             %% if we have received a receipt
                             ElemParticipants =
