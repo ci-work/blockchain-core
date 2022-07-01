@@ -211,9 +211,8 @@ check_is_valid_poc(POCVersion, Txn, Chain) ->
                                           "poc_receipts error get_block, last_challenge: ~p, reason: ~p",
                                           [PrePocBlockHeight, Reason]),
                             Error;
-                        {ok, #block_info_v2{height = BlockHeight,
+                        {ok, #block_info_v2{height = BlockHeight, hash = PrePoCBlockHash,
                                          time = BlockTime}} ->
-                            PrePoCBlockHash = blockchain_ledger_poc_v3:block_hash(PoC),
                             StartLA = maybe_log_duration(prelude, StartPre),
                             {ok, OldLedger} = blockchain:ledger_at(BlockHeight, Chain),
                             StartFT = maybe_log_duration(ledger_at, StartLA),
