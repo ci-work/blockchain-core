@@ -214,6 +214,7 @@ check_is_valid_poc(POCVersion, Txn, Chain) ->
                         {ok, #block_info_v2{height = BlockHeight,
                                          time = BlockTime}} ->
                             PrePoCBlockHash = blockchain_ledger_poc_v3:block_hash(PoC),
+                            lager:info("block height for prepoc: ~p", [BlockHeight]),
                             StartLA = maybe_log_duration(prelude, StartPre),
                             {ok, OldLedger} = blockchain:ledger_at(BlockHeight, Chain),
                             StartFT = maybe_log_duration(ledger_at, StartLA),
