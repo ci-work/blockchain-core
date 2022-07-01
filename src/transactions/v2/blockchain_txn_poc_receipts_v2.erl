@@ -215,7 +215,7 @@ check_is_valid_poc(POCVersion, Txn, Chain) ->
                                          time = BlockTime}} ->
                             PrePoCBlockHash = blockchain_ledger_poc_v3:block_hash(PoC),
                             StartLA = maybe_log_duration(prelude, StartPre),
-                            {ok, OldLedger} = blockchain:ledger_at(BlockHeight, Chain),
+                            {ok, OldLedger} = blockchain:ledger_at(PrePocBlockHeight, Chain),
                             StartFT = maybe_log_duration(ledger_at, StartLA),
                             Vars = vars(OldLedger),
                             Entropy = <<POCOnionKeyHash/binary, PrePoCBlockHash/binary>>,
@@ -261,7 +261,7 @@ get_path(_POCVersion, Challenger, BlockTime, Entropy, Keys, Vars, OldLedger, Led
     %% poc was initialized
     PathingLedger =
         case TargetV of
-            N when N >= 7 -> OldLedger;
+            N when N >= 6 -> OldLedger;
             _ -> Ledger
         end,
     {ok, {Target, TargetRandState}} =  TargetMod:target(Challenger, InitTargetRandState, ZoneRandState, PathingLedger, Vars),
