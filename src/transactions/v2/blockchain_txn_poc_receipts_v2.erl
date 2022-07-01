@@ -215,7 +215,7 @@ check_is_valid_poc(POCVersion, Txn, Chain) ->
                                          time = BlockTime}} ->
                             PrePoCBlockHash = blockchain_ledger_poc_v3:block_hash(PoC),
                             StartLA = maybe_log_duration(prelude, StartPre),
-                            {ok, OldLedger} = blockchain:ledger_at(PrePocBlockHeight, Chain),
+                            {ok, OldLedger} = blockchain:ledger_at(BlockHeight, Chain),
                             StartFT = maybe_log_duration(ledger_at, StartLA),
                             Vars = vars(OldLedger),
                             Entropy = <<POCOnionKeyHash/binary, PrePoCBlockHash/binary>>,
