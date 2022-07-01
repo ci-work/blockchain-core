@@ -217,7 +217,7 @@ check_is_valid_poc(POCVersion, Txn, Chain) ->
                             StartLA = maybe_log_duration(prelude, StartPre),
                             {ok, OldLedger} = blockchain:ledger_at(BlockHeight, Chain),
                             StartFT = maybe_log_duration(ledger_at, StartLA),
-                            Vars = vars(Ledger),
+                            Vars = vars(OldLedger),
                             Entropy = <<POCOnionKeyHash/binary, PrePoCBlockHash/binary>>,
                             {Path, StartP} = ?MODULE:get_path(POCVersion, Challenger, BlockTime, Entropy, Keys, Vars, OldLedger, Ledger, StartFT),
                             N = erlang:length(Path),
