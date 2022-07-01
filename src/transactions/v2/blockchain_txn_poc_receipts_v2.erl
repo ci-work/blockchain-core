@@ -211,12 +211,13 @@ check_is_valid_poc(POCVersion, Txn, Chain) ->
                                           "poc_receipts error get_block, last_challenge: ~p, reason: ~p",
                                           [PrePocBlockHeight, Reason]),
                             Error;
-                        {ok, #block_info_v2{height = BlockHeight, hash = PrePoCBlockHash,
+                        {ok, #block_info_v2{height = BlockHeight,
                                          time = BlockTime}} ->
+                            PrePoCBlockHash = blockchain_ledger_poc_v3:block_hash(PoC),
                             StartLA = maybe_log_duration(prelude, StartPre),
                             {ok, OldLedger} = blockchain:ledger_at(BlockHeight, Chain),
                             StartFT = maybe_log_duration(ledger_at, StartLA),
-                            Vars = vars(OldLedger),
+                            Vars = vars(Ledger),
                             Entropy = <<POCOnionKeyHash/binary, PrePoCBlockHash/binary>>,
                             {Path, StartP} = ?MODULE:get_path(POCVersion, Challenger, BlockTime, Entropy, Keys, Vars, OldLedger, Ledger, StartFT),
                             N = erlang:length(Path),
