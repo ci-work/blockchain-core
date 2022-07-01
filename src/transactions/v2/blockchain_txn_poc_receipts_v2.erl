@@ -267,7 +267,7 @@ get_path(_POCVersion, Challenger, BlockTime, Entropy, Keys, Vars, OldLedger, Led
     {ok, {Target, TargetRandState}} =  TargetMod:target(Challenger, InitTargetRandState, ZoneRandState, PathingLedger, Vars),
     %% Path building phase
     StartB = maybe_log_duration(target, StartT),
-    RetB = blockchain_poc_path_v4:build(Target, TargetRandState, OldLedger, BlockTime, Vars),
+    RetB = blockchain_poc_path_v4:build(Target, TargetRandState, PathingLedger, BlockTime, Vars),
     EndT = maybe_log_duration(build, StartB),
     {RetB, EndT}.
 
