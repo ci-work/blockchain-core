@@ -673,7 +673,7 @@ validate(_POCVersion, Txn, Path, LayerData, LayerHashes, OldLedger) ->
                                                        {error, invalid_receipt}
                                                end;
                                            _Unknown ->
-                                               lager:error([{poc_id, POCID}], "receipt not in order, ~p ~p", [Elem, Gateway]),
+                                               lager:error([{poc_id, POCID}], "receipt not in order, ~p ~p", [blockchain_poc_path_element_v1:challengee(Elem), Gateway]),
                                                {error, receipt_not_in_order}
                                        end
                                end,
