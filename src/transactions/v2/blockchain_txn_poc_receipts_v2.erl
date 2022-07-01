@@ -266,7 +266,7 @@ get_path(_POCVersion, Challenger, BlockTime, Entropy, Keys, Vars, OldLedger, Led
             _ -> Ledger
         end,
     {ok, {Target, TargetRandState}} =  TargetMod:target(Challenger, InitTargetRandState, ZoneRandState, PathingLedger, Vars),
-    lager:info("target selected challenger ~p target ~p", [?TO_ANIMAL_NAME(Challenger), ?TO_ANIMAL_NAME(Target)]),
+    lager:info("target version ~p selected challenger ~p target ~p", [TargetV, ?TO_ANIMAL_NAME(Challenger), ?TO_ANIMAL_NAME(Target)]),
     %% Path building phase
     StartB = maybe_log_duration(target, StartT),
     RetB = blockchain_poc_path_v4:build(Target, TargetRandState, OldLedger, BlockTime, Vars),
