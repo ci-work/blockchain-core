@@ -261,7 +261,7 @@ get_path(_POCVersion, Challenger, BlockTime, Entropy, Keys, Vars, OldLedger, Led
     %% poc was initialized
     PathingLedger =
         case TargetV of
-            N when N >= 6 -> OldLedger;
+            N when N >= 7 -> OldLedger;
             _ -> Ledger
         end,
     {ok, {Target, TargetRandState}} =  TargetMod:target(Challenger, InitTargetRandState, ZoneRandState, PathingLedger, Vars),
