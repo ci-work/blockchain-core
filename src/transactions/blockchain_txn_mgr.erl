@@ -477,7 +477,6 @@ code_change(_OldVsn, State, _Extra) ->
 initialize_with_chain(State, Chain)->
     {ok, Height} = blockchain:height(Chain),
     Ledger = blockchain:ledger(Chain),
-    {ok, LedgerHeight} = blockchain_ledger_v1:current_height(Ledger),
     %% rewrite any cached txn from before we had a chain with the current block height, none of these will have been submitted as yet
     F = fun({TxnKey, Txn, TxnData}) ->
             ok = cache_txn(TxnKey, Txn, TxnData#txn_data{recv_block_height = Height})
