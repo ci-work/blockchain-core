@@ -29,8 +29,8 @@
         base64url,
         jsx,
         erbloom,
-        grpc_client,
-        hackney
+        hackney,
+        erlang_lorawan
     ]},
     {env,[]},
     {modules, []},

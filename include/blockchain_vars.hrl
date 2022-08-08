@@ -150,6 +150,11 @@
 %% Number of blocks after a POC is started at which point it will timeout/expire: integer
 -define(poc_timeout, poc_timeout).
 
+%% Scale factor which will be applied to the number of poc proposals to select
+%% this will represent the max number of iterations over the select key loop
+%% that will be performed :: float
+-define(poc_proposals_selector_retry_scale_factor, poc_proposals_selector_retry_scale_factor).
+
 %% Number of blocks after poc_timeout at which point the poc public data will be deleted from the ledger: integer
 %% NOTE: the public poc data is required as part of the receipt_v2 txn validations
 %%       and so this value must be sufficient as to give time for absorb to occur
@@ -219,8 +224,8 @@
 %% max number of hexes to GC in the h3dex per block: integer
 -define(h3dex_gc_width, h3dex_gc_width).
 
-%% determines whether or not to use the fix for a bug in removing gateways from h3dex : boolean
--define(h3dex_remove_gw_fix, h3dex_remove_gw_fix).
+%% determines whether or not to use the fix for a bug in adding/removing gateways from h3dex: boolean
+-define(h3dex_targeting_lookup_fix, h3dex_targeting_lookup_fix).
 
 %% the version number of poc targeting in use: integer
 %% if not set, code paths with default to 3 ( blockchain_poc_target_v3 )
@@ -632,4 +637,8 @@
 -define(deprecate_security_exchange_v1, deprecate_security_exchange_v1).
 %% How many reward server keys to allow
 -define(allowed_num_reward_server_keys, allowed_num_reward_server_keys).
+%% limit per-block payout of l2 tokens
+-define(subnetwork_reward_per_block_limit, subnetwork_reward_per_block_limit).
 
+%% bugfix sync limiter for balance break bug
+-define(balance_erase_bugfix, balance_erase_bugfix).

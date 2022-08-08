@@ -243,6 +243,8 @@
     load_raw_dc_accounts/2,
     snapshot_raw_security_accounts/1,
     load_raw_security_accounts/2,
+    snapshot_raw_accounts_v2/1,
+    load_raw_accounts_v2/2,
 
     load_oracle_price/2,
     load_oracle_price_list/2,
@@ -251,6 +253,9 @@
     load_validators/2,
     snapshot_delayed_hnt/1,
     load_delayed_hnt/2,
+
+    snapshot_subnetworks/1,
+    load_subnetworks/2,
 
     clean/1, clean_aux/1, close/1,
     compact/1,
@@ -2209,22 +2214,60 @@ process_poc_proposals(BlockHeight, BlockHash, Ledger) ->
 
 -spec promote_proposals(non_neg_integer(), binary(), pos_integer(), pos_integer(), boolean(), rand:state(),
     ledger(), atom(), rocksdb:iterator(), blockchain_ledger_poc_v3:pocs()) -> blockchain_ledger_poc_v3:pocs().
+promote_proposals(K, Hash, Height, POCValKeyProposalTimeout, ProposalGCWindowCheck,
+    RandState, Ledger, Name, Iter, Acc) ->
+    %% if the var poc_proposals_selector_retry_scale_factor is set
+    %% then we use this to derive a max number of retry attempts
+    %% we will make to select keys
+    %% it is possible the iterator will move to a key
+    %% which we dont want to use, such as if it has already been
+    %% deleted from the cache or its within the GC window
+    %% prior to this chain var, these could count towards
+    %% the number of keys selection attempts
+    %% and resulted in a lesser number of keys being selected
+    %% than our target count
+    %% with this var, we will not count those fails
+    %% and instead retry to select another key
+    %% up until a max number of iterations over the
+    %% select function
+    %% if the var is not set, then the max iteration count
+    %% will default to that of K
+    %% which will give us the original behaviour
+    MaxIterationCount =
+        case blockchain:config(?poc_proposals_selector_retry_scale_factor, Ledger) of
+            {ok, N} -> ceil(K * N);
+            _ -> K
+        end,
+    promote_proposals(K, Hash, Height, POCValKeyProposalTimeout, ProposalGCWindowCheck,
+    RandState, Ledger, Name, Iter, Acc, MaxIterationCount).
+
+-spec promote_proposals(non_neg_integer(), binary(), pos_integer(), pos_integer(), boolean(), rand:state(),
+    ledger(), atom(), rocksdb:iterator(), blockchain_ledger_poc_v3:pocs(), non_neg_integer()) ->
+    blockchain_ledger_poc_v3:pocs().
 promote_proposals(0, _Hash, _Height, _POCValKeyProposalTimeout, _ProposalGCWindowCheck,
-    _RandState, _Ledger, _Name, _Iter, Acc) ->
+    _RandState, _Ledger, _Name, _Iter, Acc, _NumRemainingAttemptsAcc) ->
+    %% we have hit our target number of keys, time to exit
+    Acc;
+promote_proposals(_K, _Hash, _Height, _POCValKeyProposalTimeout, _ProposalGCWindowCheck,
+    _RandState, _Ledger, _Name, _Iter, Acc, 0) ->
+    %% we have hit our max number of attempts, exit with whatever selections we have
     Acc;
 promote_proposals(K, BlockHash, BlockHeight, POCValKeyProposalTimeout,
-    ProposalGCWindowCheck, RandState, Ledger, Name, Iter, Acc) ->
+    ProposalGCWindowCheck, RandState, Ledger, Name, Iter, Acc,
+    NumRemainingAttemptsAcc) ->
     try
         {RandVal, NewRandState} = rand:uniform_s(RandState),
         RandHash = crypto:hash(sha256, <<RandVal:64/float>>),
-        NewAcc = case rocksdb:iterator_move(Iter, {seek, RandHash}) of
+        case rocksdb:iterator_move(Iter, {seek, RandHash}) of
             {ok, Key, Binary} ->
                 %% check that this has not already been promoted in
                 %% the context cache so if we're absorbing multiple
                 %% blocks we don't alter the promotion selection
                 case cache_is_deleted(Ledger, Name, Key) of
                     true ->
-                        Acc;
+                        promote_proposals(K, BlockHash, BlockHeight, POCValKeyProposalTimeout,
+                            ProposalGCWindowCheck, NewRandState, Ledger, Name, Iter, Acc,
+                            NumRemainingAttemptsAcc - 1);
                     false ->
                         POC = blockchain_ledger_poc_v3:deserialize(Binary),
                         ProposalHeight = blockchain_ledger_poc_v3:start_height(POC),
@@ -2237,21 +2280,27 @@ promote_proposals(K, BlockHash, BlockHeight, POCValKeyProposalTimeout,
                                 ActivePOC1 = blockchain_ledger_poc_v3:block_hash(BlockHash, ActivePOC0),
                                 ActivePOC2 = blockchain_ledger_poc_v3:start_height(BlockHeight, ActivePOC1),
                                 ok = promote_to_public_poc(ActivePOC2, Ledger),
-                                [ActivePOC2 | Acc];
+                                promote_proposals(K-1, BlockHash, BlockHeight, POCValKeyProposalTimeout,
+                                    ProposalGCWindowCheck, NewRandState, Ledger, Name, Iter, [ActivePOC2 | Acc],
+                                    NumRemainingAttemptsAcc - 1);
                             _ ->
-                                Acc
+                                promote_proposals(K, BlockHash, BlockHeight, POCValKeyProposalTimeout,
+                                    ProposalGCWindowCheck, NewRandState, Ledger, Name, Iter, Acc,
+                                    NumRemainingAttemptsAcc - 1)
                         end
                 end;
             {error, invalid_iterator} ->  % No reason to panic here - just end of stream.
-                Acc;
+                promote_proposals(K, BlockHash, BlockHeight, POCValKeyProposalTimeout,
+                    ProposalGCWindowCheck, NewRandState, Ledger, Name, Iter, Acc,
+                    NumRemainingAttemptsAcc - 1);
             {error, _Reason} ->
                 lager:warning("promote_proposals failed, iterator failed ~p", [_Reason]),
                 %% we probably fell off the end. Simply drop this as we may not have enough
                 %% proposals to make the cut (or we can somehow retry some fixed number of times)
-                Acc
-        end,
-        promote_proposals(K - 1, BlockHash, BlockHeight, POCValKeyProposalTimeout,
-            ProposalGCWindowCheck, NewRandState, Ledger, Name, Iter, NewAcc)
+                promote_proposals(K, BlockHash, BlockHeight, POCValKeyProposalTimeout,
+                    ProposalGCWindowCheck, NewRandState, Ledger, Name, Iter, Acc,
+                    NumRemainingAttemptsAcc - 1)
+        end
     catch _What:_Why ->
         lager:warning("promote_proposals failed, ~p ~p", [_What, _Why]),
         Acc
@@ -3241,7 +3290,14 @@ debit_account(Address, AmountOrAmounts, Nonce, Ledger) when is_integer(AmountOrA
                     Balance = EntryMod:balance(Entry),
                     case (Balance - AmountOrAmounts) >= 0 of
                         true ->
-                            Entry1 = EntryMod:new( Nonce, (Balance - AmountOrAmounts)),
+                             Entry1 =
+                                case EntryMod of
+                                    blockchain_ledger_entry_v1 ->
+                                        EntryMod:new(Nonce, (Balance - AmountOrAmounts));
+                                    blockchain_ledger_entry_v2 ->
+                                        E1 = EntryMod:debit(Entry, AmountOrAmounts, hnt),
+                                        EntryMod:nonce(E1, Nonce)
+                                end,
                             Bin = EntryMod:serialize(Entry1),
                             cache_put(Ledger, EntriesCF, Address, Bin);
                         false ->
@@ -3304,7 +3360,13 @@ debit_fee_from_account(Address, Fee, Ledger, TxnHash, Chain) ->
                         false ->
                             ok
                     end,
-                    Entry1 = EntryMod:new(EntryMod:nonce(Entry), (Balance - Fee)),
+                    Entry1 =
+                        case EntryMod of
+                            blockchain_ledger_entry_v1 ->
+                                EntryMod:new(EntryMod:nonce(Entry), (Balance - Fee));
+                            blockchain_ledger_entry_v2 ->
+                                EntryMod:debit(Entry, Fee, hnt)
+                        end,
                     EntryBin = EntryMod:serialize(Entry1),
                     cache_put(Ledger, EntriesCF, Address, EntryBin);
                 false ->
@@ -4570,7 +4632,12 @@ cache_fold(Ledger, {CFName, DB, CF}, Fun0, OriginalAcc, Opts) ->
     case context_cache(Ledger) of
         {C, _} when C == undefined; C == direct ->
             %% fold rocks directly
-            rocks_fold(Ledger, DB, CF, Opts, Fun0, OriginalAcc);
+            case rocks_fold(Ledger, DB, CF, Opts, Fun0, OriginalAcc) of
+                {return, Res} ->
+                    {ok, Res};
+                Res ->
+                    Res
+            end;
         {Cache, _GwCache} ->
             %% fold using the cache wrapper
             Fun = mk_cache_fold_fun(Cache, CFName, Start, End, Fun0),
@@ -4581,8 +4648,12 @@ cache_fold(Ledger, {CFName, DB, CF}, Fun0, OriginalAcc, Opts) ->
                 false ->
                     Keys0
             end,
-            {TrailingKeys, Res0} = rocks_fold(Ledger, DB, CF, Opts, Fun, {Keys, OriginalAcc}),
-            process_fun(TrailingKeys, Cache, CFName, Start, End, Fun0, Res0)
+            case rocks_fold(Ledger, DB, CF, Opts, Fun, {Keys, OriginalAcc}) of
+                {return, Res} ->
+                    Res;
+                {TrailingKeys, Res0} ->
+                    try process_fun(TrailingKeys, Cache, CFName, Start, End, Fun0, Res0) catch throw:{return,Res} -> Res end
+            end
     end.
 
 cache_is_deleted(Ledger, Name, Key) ->
@@ -4611,8 +4682,8 @@ rocks_fold(Ledger, DB, CF, Opts0, Fun, Acc) ->
     Init = rocksdb:iterator_move(Itr, Start),
     Loop = fun L({error, invalid_iterator}, A) ->
                    A;
-               L({error, _}, _A) ->
-                   throw(iterator_error);
+               L({error, Error}, _A) ->
+                   error({iterator_error, Error});
                L({ok, K} , A) ->
                    L(rocksdb:iterator_move(Itr, SeekDir),
                      Fun(K, A));
@@ -4622,8 +4693,10 @@ rocks_fold(Ledger, DB, CF, Opts0, Fun, Acc) ->
            end,
     try
         Loop(Init, Acc)
-    %% catch _:_ ->
-    %%         Acc
+    catch throw:{return, Ret} ->
+            %% retag this because we need to be able to disambiguate between cases
+            %% when cached
+            {return, Ret}
     after
         ?ROCKSDB_ITERATOR_CLOSE(Itr)
     end.
@@ -4946,17 +5019,27 @@ set_h3dex(H3Dex, Ledger) ->
 get_h3dex(Ledger) ->
     H3CF = h3dex_cf(Ledger),
     Res = cache_fold(Ledger, H3CF,
-                     fun({Key, GWs}, Acc) ->
+                     fun({<<"random-", _/binary>>, _}, Acc) ->
+                                   Acc;
+                        ({<<"population">>, _}, Acc) ->
+                                   Acc;
+                        ({Key, GWs}, Acc) ->
                              maps:put(key_to_h3(Key), binary_to_term(GWs), Acc)
-                     end, #{}, []),
+                     end, #{}, [
+                                %% key_to_h3 returns 7 byte binaries
+                                %% only get keys, ignore random targeting lookup
+                                {start, {seek, <<0, 0, 0, 0, 0, 0, 0>>}},
+                                {iterate_upper_bound, <<255, 255, 255, 255, 255, 255, 255>>}
+                               ]),
     Res.
 
 -spec delete_h3dex(ledger()) -> ok.
 delete_h3dex(Ledger) ->
     H3CF = h3dex_cf(Ledger),
-    _ = maps:map(fun(H3Index, _) ->
-                         cache_delete(Ledger, H3CF, h3_to_key(H3Index))
-                 end, get_h3dex(Ledger)),
+    cache_fold(Ledger, H3CF,
+                     fun({Key, _GWs}, _Acc) ->
+                             cache_delete(Ledger, H3CF, Key)
+                     end, #{}, []),
     ok.
 
 -spec lookup_gateways_from_hex(Hex :: [non_neg_integer()] | non_neg_integer(),
@@ -4973,6 +5056,17 @@ lookup_gateways_from_hex(Hex, Ledger) when is_integer(Hex) ->
                fun({Key, GWs}, Acc) ->
                        maps:put(key_to_h3(Key), binary_to_term(GWs), Acc)
                end, #{}, [
+                          {start, {seek, find_lower_bound_hex(Hex)}},
+                          {iterate_upper_bound, increment_bin(h3_to_key(Hex))}
+                         ]
+              ).
+
+is_hex_populated(Hex, Ledger) ->
+    H3CF = h3dex_cf(Ledger),
+    cache_fold(Ledger, H3CF,
+               fun({_Key, _GWs}, _Acc) ->
+                      throw({return, true})
+               end, false, [
                           {start, {seek, find_lower_bound_hex(Hex)}},
                           {iterate_upper_bound, increment_bin(h3_to_key(Hex))}
                          ]
@@ -5022,7 +5116,7 @@ random_targeting_hex(RandState, Ledger) ->
     end.
 
 build_random_hex_targeting_lookup(Resolution, Ledger) ->
-    %% we only want to do this if poc version >= 4, which means h3dex targeting
+    %% we only want to do this if poc version >= 6, which means h3dex targeting
     case config(?poc_targeting_version, Ledger) of
         {ok, N} when N >= 6 ->
             H3CF = h3dex_cf(Ledger),
@@ -5111,15 +5205,32 @@ add_gw_to_h3dex(Hex, GWAddr, Res, Ledger) ->
     BinHex = h3_to_key(Hex),
     case cache_get(Ledger, H3CF, BinHex, []) of
         not_found ->
-            case count_gateways_in_hex(h3:parent(Hex, Res), Ledger) of
-                0 ->
-                    %% populating a hex means we need to recalculate the set of populated
-                    %% hexes
-                    build_random_hex_targeting_lookup(Res, Ledger);
+            %% need to add the hex and maybe update targeting lookup if no other gateways in parent hex
+            %% includes chain var protected bug fix
+            ParentRes = h3:parent(Hex, Res),
+            case config(?h3dex_targeting_lookup_fix, Ledger) of
+                %% if fix enabled, add the hex and maybe update lookup
+                {ok, true} ->
+                    case is_hex_populated(ParentRes, Ledger) of
+                        false ->
+                            %% this is the first gateway in hex, add it then update lookup
+                            cache_put(Ledger, H3CF, BinHex, term_to_binary([GWAddr], [compressed])),
+                            build_random_hex_targeting_lookup(Res, Ledger);
+                        _ ->
+                            cache_put(Ledger, H3CF, BinHex, term_to_binary([GWAddr], [compressed]))
+                    end;
+                %% otherwise, keep the wrong behavior of maybe updating targeting lookup then add the hex
                 _ ->
-                    ok
-            end,
-            cache_put(Ledger, H3CF, BinHex, term_to_binary([GWAddr], [compressed]));
+                    case is_hex_populated(ParentRes, Ledger) of
+                        false ->
+                            %% populating a hex means we need to recalculate the set of populated
+                            %% hexes
+                            build_random_hex_targeting_lookup(Res, Ledger);
+                        _ ->
+                            ok
+                    end,
+                    cache_put(Ledger, H3CF, BinHex, term_to_binary([GWAddr], [compressed]))
+            end;
         {ok, BinGws} ->
             GWs = binary_to_term(BinGws),
             cache_put(Ledger, H3CF, BinHex, term_to_binary(lists:usort([GWAddr | GWs]), [compressed]));
@@ -5141,20 +5252,21 @@ remove_gw_from_h3dex(Hex, GWAddr, Res, Ledger) ->
         {ok, BinGws} ->
             case lists:delete(GWAddr, binary_to_term(BinGws)) of
                 [] ->
+                    ParentRes = h3:parent(Hex, Res),
                     %% need to remove the hex and maybe recalc targeting lookup if no gateways remain in parent hex
                     %% includes chain var protected bug fix
-                    case config(?h3dex_remove_gw_fix, Ledger) of
+                    case config(?h3dex_targeting_lookup_fix, Ledger) of
                         %% if fix enabled, delete the hex first, then count the parent hex's gateways
                         {ok, true} ->
                             cache_delete(Ledger, H3CF, BinHex),
-                            case count_gateways_in_hex(h3:parent(Hex, Res), Ledger) of
-                                0 -> build_random_hex_targeting_lookup(Res, Ledger);
+                            case is_hex_populated(ParentRes, Ledger) of
+                                false -> build_random_hex_targeting_lookup(Res, Ledger);
                                 _ -> ok
                             end;
                         %% otherwise, keep the wrong behavior of counting gateways then deleting the hex
                         _ ->
-                            case count_gateways_in_hex(h3:parent(Hex, Res), Ledger) of
-                                0 -> build_random_hex_targeting_lookup(Res, Ledger);
+                            case is_hex_populated(ParentRes, Ledger) of
+                                false -> build_random_hex_targeting_lookup(Res, Ledger);
                                 _ -> ok
                             end,
                             cache_delete(Ledger, H3CF, BinHex)
@@ -5886,6 +5998,15 @@ load_raw_accounts(Accounts, Ledger) ->
     EntriesCF = entries_cf(Ledger),
     load_raw(Accounts, EntriesCF, Ledger).
 
+-spec snapshot_raw_accounts_v2(ledger()) -> [{binary(), binary()}].
+snapshot_raw_accounts_v2(Ledger) ->
+    EntriesV2CF = entries_v2_cf(Ledger),
+    snapshot_raw(EntriesV2CF, Ledger).
+
+load_raw_accounts_v2(AccountsV2, Ledger) ->
+    EntriesV2CF = entries_v2_cf(Ledger),
+    load_raw(AccountsV2, EntriesV2CF, Ledger).
+
 -spec snapshot_dc_accounts(ledger()) -> [{binary(), binary()}].
 snapshot_dc_accounts(Ledger) ->
     lists:sort(maps:to_list(dc_entries(Ledger))).
@@ -6090,6 +6211,33 @@ load_h3dex(H3DexList, Ledger) ->
             rocksdb:write_batch(DB, FinalBatch, []),
             ok
     end.
+
+-spec snapshot_subnetworks(ledger()) -> [{binary(), binary()}].
+snapshot_subnetworks(Ledger) ->
+    Tokens = blockchain_token_v1:supported_tokens(),
+    SNCF = subnetworks_v1_cf(Ledger),
+    lists:foldl(
+      fun(Token, Acc) ->
+              BinToken = atom_to_binary(Token, utf8),
+              case cache_get(Ledger, SNCF, BinToken, []) of
+                  {ok, BinEntry} ->
+                      [{BinToken,BinEntry}  | Acc];
+                  not_found ->
+                      Acc
+              end
+      end,
+      [],
+      Tokens).
+
+-spec load_subnetworks([{binary(), binary()}], ledger()) -> ok.
+load_subnetworks(Subnetworks, Ledger) ->
+    SNCF = subnetworks_v1_cf(Ledger),
+    lists:map(
+      fun({BinToken, BinEntry}) ->
+              ok = cache_put(Ledger, SNCF, BinToken, BinEntry)
+      end,
+      Subnetworks),
+    ok.
 
 -spec get_sc_mod( Entry :: blockchain_ledger_state_channel_v1:state_channel() |
                            blockchain_ledger_state_channel_v2:state_channel_v2(),
@@ -6388,6 +6536,11 @@ fold_test() ->
     ?assertEqual({ok, <<"bbb">>}, cache_get(Ledger, DCF, <<"aaa">>, [])),
 
     ?assertEqual({ok, <<"bbb">>}, cache_get(Ledger, DCF, <<"key_1">>, [])),
+
+    %% throw for early return:
+    F4 = cache_fold(Ledger, DCF, fun({<<"key_12">>, _V}, _A) -> throw({return, done_early}); (_KV, A) -> A end, done_normal),
+    ?assertEqual({ok, done_early}, F4),
+
     test_utils:cleanup_tmp_dir(BaseDir).
 
 

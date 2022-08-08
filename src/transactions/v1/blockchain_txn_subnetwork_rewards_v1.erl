@@ -20,6 +20,7 @@
     start_epoch/1,
     end_epoch/1,
     rewards/1,
+    token_type/1,
     reward_server_signature/1,
 
     %% reward accessors
@@ -160,6 +161,18 @@ is_valid(Txn, Chain) ->
                 end;
             false ->
                 throw({invalid_reward_range, Start, End, LastRewardedBlock})
+        end,
+
+        case blockchain_ledger_v1:config(?subnetwork_reward_per_block_limit, Ledger) of
+            {ok, BlockRewardLimit} ->
+                RewardLimit = BlockRewardLimit * (End - Start),
+                case TotalRewards =< RewardLimit of
+                    true -> ok;
+                    false -> throw({rewards_too_large, TotalRewards, RewardLimit})
+                end;
+            _ ->
+                %% subnetwork_reward_per_block_limit is not set, allow (for devnet)
+                ok
         end
     catch
         throw:Err ->
@@ -241,9 +254,10 @@ to_json(Txn, _Opts) ->
         [],
         ?MODULE:rewards(Txn)
     ),
-
+    TT = ?MODULE:token_type(Txn),
     #{
         type => ?MODULE:json_type(),
+        token_type => ?MAYBE_ATOM_TO_BINARY(TT),
         hash => ?BIN_TO_B64(hash(Txn)),
         start_epoch => start_epoch(Txn),
         end_epoch => end_epoch(Txn),
@@ -254,5 +268,14 @@ to_json(Txn, _Opts) ->
 %% EUNIT Tests
 %% ------------------------------------------------------------------
 -ifdef(TEST).
+
+to_json_test() ->
+
+    T = new(mobile, 1, 30, [new_reward(<<"rewardee">>, 100)]),
+    Json = to_json(T, []),
+    ?assert(lists:all(fun(K) -> maps:is_key(K, Json) end,
+                      [type, hash, token_type, start_epoch, end_epoch, rewards])),
+    ?assertEqual(<<"mobile">>, maps:get(token_type, Json)),
+    ok.
 
 -endif.

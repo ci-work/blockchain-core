@@ -243,7 +243,7 @@ cancels(Txn) ->
 nonce(Txn) ->
     Txn#blockchain_txn_vars_v1_pb.nonce.
 
--spec is_valid(txn_vars(), blockchain:blockchain()) -> ok | {error, any()}.
+-spec is_valid(txn_vars(), blockchain:blockchain()) -> ok | {error, atom()} | {error, {atom(), any()}}.
 is_valid(Txn, Chain) ->
     Ledger = blockchain:ledger(Chain),
     Gen =
@@ -512,7 +512,7 @@ validate_master_keys(Txn, Gen, Artifact, Ledger) ->
 
 %% TODO: we need a generalized hook here for when chain vars change
 %% and invalidate something in the ledger, to enable stuff to stay consistent
--spec absorb(txn_vars(), blockchain:blockchain()) -> ok | {error, any()}.
+-spec absorb(txn_vars(), blockchain:blockchain()) -> ok | {error, atom()} | {error, {atom(), any()}}.
 absorb(Txn, Chain) ->
     Ledger = blockchain:ledger(Chain),
 
@@ -1012,6 +1012,8 @@ validate_var(?poc_receipts_absorb_timeout, Value) ->
     validate_int(Value, "poc_receipts_absorb_timeout", 10, 100, false);
 validate_var(?poc_validator_ephemeral_key_timeout, Value) ->
     validate_int(Value, "poc_validator_ephemeral_key_timeout", 1, 1000, false);
+validate_var(?poc_proposals_selector_retry_scale_factor, Value) ->
+    validate_float(Value, "poc_proposals_selector_retry_scale_factor", 1.0, 2.0);
 
 validate_var(?poc_challenger_type, Value) ->
     case Value of
@@ -1136,7 +1138,7 @@ validate_var(?polyfill_resolution, Value) ->
     validate_int(Value, "polyfill_resolution", 0, 15, false);
 validate_var(?h3dex_gc_width, Value) ->
   validate_int(Value, "h3dex_gc_width", 1, 10000, false);
-validate_var(?h3dex_remove_gw_fix, Value) ->
+validate_var(?h3dex_targeting_lookup_fix, Value) ->
   case Value of
         Val when is_boolean(Val) -> ok;
         _ -> throw({error, {h3dex_gw_remove_fix, Value}})
@@ -1256,6 +1258,15 @@ validate_var(?allowed_num_reward_server_keys, Value) ->
             %% only supported one reward server for now
             ok;
         _ -> throw({error, {invalid_allowed_num_reward_server_keys, Value}})
+    end;
+
+validate_var(?subnetwork_reward_per_block_limit, Value) ->
+    validate_int(Value, "subnetwork_reward_per_block_limit", 0, 10000000000000, false);
+
+validate_var(?balance_erase_bugfix, Value) ->
+    case Value of
+        Val when is_boolean(Val) andalso Val == true -> ok;
+        _ -> throw({error, {invalid_balance_erase_bugfix, Value}})
     end;
 
 %% general txn vars
