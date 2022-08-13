@@ -181,13 +181,13 @@ snapshot(Ledger0, Blocks, Infos, Mode) ->
     {_Pid, MonitorRef} =
         spawn_opt(
             fun Retry() ->
-                Ledger = blockchain_ledger_v1:mode(Mode, Ledger0),
+                Ledger = blockchain_ledger_v1:mode(Mode, blockchain_ledger_v1:remove_context(Ledger0)),
                 {ok, CurrHeight} = blockchain_ledger_v1:current_height(Ledger),
                 %% this should not leak a huge amount of atoms
                 Regname = list_to_atom("snapshot_"++integer_to_list(CurrHeight)),
                 try register(Regname, self()) of
                     true ->
-                        Res = generate_snapshot(Ledger0, Blocks, Infos, Mode),
+                        Res = generate_snapshot(blockchain_ledger_v1:remove_context(Ledger0), Blocks, Infos, Mode),
                         %% deliver to the caller
                         Parent ! {Ref, Res},
                         %% deliver to anyone else blocking
@@ -224,8 +224,10 @@ snapshot(Ledger0, Blocks, Infos, Mode) ->
         ),
     receive
         {Ref, Res} ->
+            erlang:demonitor(MonitorRef, [flush]),
             Res;
-        {'DOWN', MonitorRef, process, _, killed} ->
+        {'DOWN', MonitorRef, process, _, Other} ->
+            lager:info("failed to take snapshot ~p", [Other]),
             {error, killed}
     end.
 
@@ -262,7 +264,7 @@ generate_snapshot(Ledger, Blocks, Infos, Mode) ->
     {ok, snapshot_v5()} | {error, snapshot_error()}.
 generate_snapshot_v5(Ledger0, Blocks, Infos, Mode) ->
     try
-        Ledger = blockchain_ledger_v1:mode(Mode, Ledger0),
+        Ledger = blockchain_ledger_v1:mode(Mode, blockchain_ledger_v1:remove_context(Ledger0)),
         {ok, CurrHeight} = blockchain_ledger_v1:current_height(Ledger),
         {ok, ValidatorCount} = blockchain_ledger_v1:validator_count(Ledger),
         {ok, ConsensusMembers} = blockchain_ledger_v1:consensus_members(Ledger),
@@ -305,7 +307,6 @@ generate_snapshot_v5(Ledger0, Blocks, Infos, Mode) ->
         {ok, HntBurned} = blockchain_ledger_v1:hnt_burned(Ledger),
 
         Subnetworks = blockchain_ledger_v1:snapshot_subnetworks(Ledger),
-
         %% use the active ledger here because that's where upgrades are marked
         Upgrades = blockchain:get_upgrades(blockchain_ledger_v1:mode(active, Ledger0)),
         Pairs =
@@ -623,7 +624,7 @@ load_into_ledger(Snapshot, L0, Mode) ->
     case blockchain_ledger_v1:check_key(<<"poc_upgrade">>, L) of
         true -> ok;
         _ ->
-            case blockchain_ledger_v1:config(?poc_challenger_type, L) of
+            case ?get_var(?poc_challenger_type, L) of
                 {ok, validator} ->
                     ok;
                 {error, not_found} ->
@@ -775,7 +776,7 @@ stream_from_list([X | Xs]) ->
 get_infos(Chain) ->
     Ledger = blockchain:ledger(Chain),
     {ok, Height} = blockchain_ledger_v1:current_height(Ledger),
-    {ok, POCChallengeInterval} = blockchain:config(?poc_challenge_interval, Ledger),
+    {ok, POCChallengeInterval} = ?get_var(?poc_challenge_interval, Ledger),
 
     LoadInfoStart = Height - (POCChallengeInterval * 2) + 1,
 
@@ -795,7 +796,7 @@ get_blocks(Chain) ->
     %% see https://github.com/helium/blockchain-core/pull/627
     #{election_height := ElectionHeight} = blockchain_election:election_info(Ledger),
     GraceBlocks =
-        case blockchain:config(?sc_grace_blocks, Ledger) of
+        case ?get_var(?sc_grace_blocks, Ledger) of
             {ok, GBs} ->
                 GBs;
             %% hard matching on this config makes it impossible to snapshot before we hit state
@@ -804,7 +805,7 @@ get_blocks(Chain) ->
                 0
         end,
 
-    DLedger = blockchain_ledger_v1:mode(delayed, Ledger),
+    DLedger = blockchain_ledger_v1:mode(delayed, blockchain_ledger_v1:remove_context(Ledger)),
     {ok, DHeight0} = blockchain_ledger_v1:current_height(DLedger),
 
     {ok, #block_info_v2{election_info={_, DHeight}}} = blockchain:get_block_info(DHeight0, Chain),

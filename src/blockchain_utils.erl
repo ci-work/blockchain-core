@@ -5,6 +5,7 @@
 %%%-------------------------------------------------------------------
 -module(blockchain_utils).
 
+-include("blockchain.hrl").
 -include("blockchain_json.hrl").
 -include("blockchain_utils.hrl").
 -include("blockchain_vars.hrl").
@@ -20,6 +21,9 @@
     poc_id/1,
     pfind/2, pfind/3,
     pmap/2,
+    streaming_pmap_new/1,
+    streaming_pmap_submit/2,
+    streaming_pmap_done/1,
     addr2name/1,
     addr2uri/1,
     distance/2,
@@ -59,7 +63,6 @@
     get_vars/2, get_var/2,
     var_cache_stats/0,
     teardown_var_cache/0,
-    init_var_cache/0,
     target_v_to_mod/1
 
 
@@ -85,7 +88,7 @@
 -spec calculate_dc_amount(Ledger :: blockchain_ledger_v1:ledger(),
                           PayloadSize :: non_neg_integer()) -> pos_integer() | {error, any()}.
 calculate_dc_amount(Ledger, PayloadSize) ->
-    case blockchain_ledger_v1:config(?dc_payload_size, Ledger) of
+    case ?get_var(?dc_payload_size, Ledger) of
         {ok, DCPayloadSize} ->
             do_calculate_dc_amount(PayloadSize, DCPayloadSize);
         _ ->
@@ -163,7 +166,7 @@ normalize_float(Float) ->
 %%--------------------------------------------------------------------
 -spec challenge_interval(blockchain_ledger_v1:ledger()) -> non_neg_integer().
 challenge_interval(Ledger) ->
-    {ok, Interval} = blockchain:config(?poc_challenge_interval, Ledger),
+    {ok, Interval} = ?get_var(?poc_challenge_interval, Ledger),
     Interval.
 
 -spec serialize_hash(binary()) -> string().
@@ -316,6 +319,68 @@ addr2name(Addr) ->
     {ok, N} = erl_angry_purple_tiger:animal_name(B58Addr),
     N.
 
+streaming_pmap_new(F) ->
+    Width = validation_width(),
+    streaming_pmap_new(F, Width).
+
+streaming_pmap_new(F, Width) ->
+    [ spawn(streaming_pmap_loop_fun(F)) || _ <-  lists:seq(1, Width) ].
+
+streaming_pmap_loop_fun(F) ->
+    Parent = self(),
+    fun() ->
+    L = fun Loop(Acc) ->
+            receive
+                {input, V} ->
+                    Loop([F(V) | Acc]);
+                done ->
+                    Parent ! {done, self(), Acc}
+            end
+    end,
+    L([])
+    end.
+
+streaming_pmap_submit(Workers, Input) ->
+    Index = (erlang:phash2(Input) rem length(Workers))+ 1,
+    Worker = lists:nth(Index, Workers),
+    Worker ! {input, Input},
+    ok.
+
+streaming_pmap_done(Workers) ->
+    [ begin Pid ! done, erlang:monitor(process, Pid) end || Pid <- Workers ],
+    fun() ->
+    L = fun Loop(Acc, []) ->
+                %% done
+                Acc;
+            Loop(Acc, RemainingWorkers) ->
+            receive
+                {'DOWN', _Ref, process, Worker, Info} = Msg ->
+                    case lists:member(Worker, RemainingWorkers) of
+                        true ->
+                            case Info of
+                                normal ->
+                                    Loop(Acc, RemainingWorkers -- [Worker]);
+                                Other ->
+                                    error({pmap_worker_crashed, {Worker, Other}})
+                            end;
+                        false ->
+                            self() ! Msg,
+                            Loop(Acc, RemainingWorkers)
+                    end;
+                {done, Worker, Result} = Msg ->
+                    case lists:member(Worker, RemainingWorkers) of
+                        true ->
+                            Loop(Acc ++ Result, RemainingWorkers);
+                        false ->
+                            self() ! Msg,
+                            Loop(Acc, RemainingWorkers)
+                    end
+            end
+        end,
+    L([], Workers)
+    end().
+
+
 -spec addr2uri(libp2p_crypto:pubkey_bin() | undefined) -> binary() | undefined.
 addr2uri(undefined) -> undefined;
 addr2uri(PubKeyBin) ->
@@ -435,10 +500,11 @@ score_gateways(Ledger) ->
     case blockchain_ledger_v1:mode(Ledger) of
         delayed ->
             %% Use the cache in delayed ledger mode
-            e2qc:cache(gw_cache, {Height},
-                       fun() ->
-                               score_tagged_gateways(Height, Ledger)
-                       end);
+            Cache = persistent_term:get(?gw_cache),
+            cream:cache(Cache, {Height},
+                        fun() ->
+                                score_tagged_gateways(Height, Ledger)
+                        end);
         active ->
             %% recalculate in active ledger mode
             score_tagged_gateways(Height, Ledger)
@@ -567,7 +633,7 @@ nearest_byte(X) ->
 
 -spec approx_blocks_in_week(Ledger :: blockchain_ledger_v1:ledger()) -> pos_integer().
 approx_blocks_in_week(Ledger) ->
-    case blockchain:config(?block_time, Ledger) of
+    case ?get_var(?block_time, Ledger) of
         {ok, BT} ->
             %% BT is in ms
             %% ms in a week = 7 * 24 * 60 * 60 * 1000
@@ -689,7 +755,7 @@ find_key(Proof, Artifact, [Key|Keys]) ->
 
 -spec poc_per_hop_max_witnesses(Ledger :: blockchain_ledger_v1:ledger()) -> pos_integer().
 poc_per_hop_max_witnesses(Ledger) ->
-    case blockchain:config(?poc_per_hop_max_witnesses, Ledger) of
+    case ?get_var(?poc_per_hop_max_witnesses, Ledger) of
         {ok, N} -> N;
         _ ->
             %% Defaulted to 5 to preserve backward compatability
@@ -798,7 +864,7 @@ get_vars(VarList, Ledger) ->
     lists:foldl(
       fun(VarName, Acc) ->
               %% NOTE: This isn't ideal but in order for get_var/2 to
-              %% correspond with blockchain:config/2, it returns {ok, ..} | {error, ..}
+              %% correspond with ?get_var/2, it returns {ok, ..} | {error, ..}
               %% So we just put undefined for any error lookups here.
               %% The callee must handle those situations.
               case get_var_(VarName, IsAux, VarsNonce, Ledger) of
@@ -812,17 +878,24 @@ get_vars(VarList, Ledger) ->
                VarsNonce :: non_neg_integer(),
                Ledger :: blockchain_ledger_v1:ledger()) -> {ok, any()} | {error, any()}.
 get_var_(VarName, HasAux, VarsNonce, Ledger) ->
-    e2qc:cache(
-        ?VAR_CACHE,
-        {HasAux, VarsNonce, VarName},
-        fun() ->
-            get_var_(VarName, Ledger)
-        end
+    Cache = persistent_term:get(?var_cache),
+    cream:cache(
+      Cache,
+      {HasAux, VarsNonce, VarName},
+      fun() ->
+              get_var_(VarName, Ledger)
+      end
     ).
 
 -spec get_var(VarName :: atom(), Ledger :: blockchain_ledger_v1:ledger()) -> {ok, any()} | {error, any()}.
 get_var(VarName, Ledger) ->
-    get_var_(VarName, Ledger).
+    VarsNonce =
+        case blockchain_ledger_v1:vars_nonce(Ledger) of
+            {ok, VN} -> VN;
+            _ -> 0 % genesis case
+        end,
+    IsAux = blockchain_ledger_v1:is_aux(Ledger),
+    get_var_(VarName, IsAux, VarsNonce, Ledger).
 
 -spec get_var_(VarName :: atom(), Ledger :: blockchain_ledger_v1:ledger()) -> {ok, any()} | {error, any()}.
 get_var_(VarName, Ledger) ->
@@ -830,17 +903,14 @@ get_var_(VarName, Ledger) ->
 
 -spec var_cache_stats() -> list().
 var_cache_stats() ->
-    %%e2qc:stats(?VAR_CACHE).
+    %%cream:count(?var_cache).
     [].
 
 -spec teardown_var_cache() -> ok.
 teardown_var_cache() ->
-    e2qc:teardown(?VAR_CACHE),
+    Cache = persistent_term:get(?var_cache),
+    cream:drain(Cache),
     ok.
-
-init_var_cache() ->
-    %% TODO could pull cache settings from app env here
-    e2qc:setup(?VAR_CACHE, []).
 
 -spec target_v_to_mod({error, not_found} | {ok, integer()}) -> atom().
 %% note: target_v_to_mod used by validator challenges related
@@ -872,6 +942,14 @@ pmap_test() ->
     ?assertEqual(6, maps:size(Map)),
     ?assertEqual([3, 3, 3, 4, 4, 4], lists:sort(maps:values(Map))),
     ?assertEqual(Input, Results).
+
+streaming_pmap_test() ->
+    Input = lists:seq(1, 21),
+    Workers = streaming_pmap_new(fun(E) -> E end),
+    [ streaming_pmap_submit(Workers, E) || E <- Input ],
+    Results = streaming_pmap_done(Workers),
+    ?assertEqual(Input, lists:sort(Results)).
+
 
 get_pubkeybin_sigfun_test() ->
     {timeout, 30000,

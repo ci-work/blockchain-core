@@ -75,7 +75,7 @@
     add_htlc_receipt/3,
     get_htlc_receipt/2,
 
-    mark_upgrades/2, unmark_upgrades/2, get_upgrades/1, bootstrap_h3dex/1,
+    mark_upgrades/2, unmark_upgrades/2, get_upgrades/1, process_upgrades/1, bootstrap_h3dex/1,
     snapshot_height/1,
 
     db_handle/1,
@@ -137,7 +137,8 @@
                           fun upgrade_gateways_score/1,
                           fun upgrade_gateways_score/1,
                           fun upgrade_nonce_rescue/1,
-                          fun blockchain_ledger_v1:upgrade_pocs/1]).
+                          fun blockchain_ledger_v1:upgrade_pocs/1,
+                          fun blockchain_ledger_v1:precalc_h3_caches/1]).
 
 -define(BLOCK_READ_SIZE, 4096*8). % 32K
 
@@ -197,8 +198,9 @@ new(Dir, GenBlock, QuickSyncMode, QuickSyncData) ->
             lager:warning("failed to load genesis block ~p, integrating new one", [Reason]),
             try ?MODULE:integrate_genesis(GenBlock, Blockchain) of
                 ok ->
-                    Ledger = blockchain:ledger(Blockchain),
+                    Ledger = blockchain_ledger_v1:new_context(blockchain:ledger(Blockchain)),
                     mark_upgrades(?BC_UPGRADE_NAMES, Ledger),
+                    blockchain_ledger_v1:commit_context(Ledger),
                     {ok, init_quick_sync(QuickSyncMode, Blockchain, QuickSyncData)}
             catch What:Why ->
                     lager:warning("failed to integrate genesis block ~p, wiping chain", [{What, Why}]),
@@ -228,31 +230,27 @@ process_upgrades([{Key, Fun} | Tail], Ledger) ->
             ok;
         false ->
             lager:info("running ledger upgrade ~p", [Key]),
-            Ledger1 = blockchain_ledger_v1:new_context(Ledger),
+            Ledger1 = blockchain_ledger_v1:new_public_context(Ledger),
             Fun(Ledger1),
             blockchain_ledger_v1:mark_key(Key, Ledger1),
             blockchain_ledger_v1:commit_context(Ledger1),
             Ledger2_0 = blockchain_ledger_v1:mode(delayed, Ledger),
-            Ledger2 = blockchain_ledger_v1:new_context(Ledger2_0),
+            Ledger2 = blockchain_ledger_v1:new_public_context(Ledger2_0),
             Fun(Ledger2),
             blockchain_ledger_v1:commit_context(Ledger2)
     end,
     process_upgrades(Tail, Ledger).
 
 mark_upgrades(Upgrades, Ledger) ->
-    Ledger1 = blockchain_ledger_v1:new_context(Ledger),
     lists:foreach(fun(Key) ->
-                          blockchain_ledger_v1:mark_key(Key, Ledger1)
+                          blockchain_ledger_v1:mark_key(Key, Ledger)
                   end, Upgrades),
-    blockchain_ledger_v1:commit_context(Ledger1),
     ok.
 
 unmark_upgrades(Upgrades, Ledger) ->
-    Ledger1 = blockchain_ledger_v1:new_context(Ledger),
     lists:foreach(fun(Key) ->
-                          blockchain_ledger_v1:unmark_key(Key, Ledger1)
+                          blockchain_ledger_v1:unmark_key(Key, Ledger)
                   end, Upgrades),
-    blockchain_ledger_v1:commit_context(Ledger1),
     ok.
 
 upgrade_gateways_v2(Ledger) ->
@@ -288,7 +286,7 @@ upgrade_gateways_lg(Ledger) ->
       Ledger).
 
 upgrade_gateways_score(Ledger) ->
-    case blockchain:config(?election_version, Ledger) of
+    case ?get_var(?election_version, Ledger) of
         %% election v4 removed score from consideration
         {ok, EV} when EV >= 4 ->
             blockchain_ledger_v1:cf_fold(
@@ -578,7 +576,7 @@ ledger_at(Height, Chain0) ->
 
 -spec ledger_at(pos_integer(), blockchain(), boolean()) -> {ok, blockchain_ledger_v1:ledger()} | {error, any()}.
 ledger_at(Height, Chain0, ForceRecalc) ->
-    Ledger0 = ?MODULE:ledger(Chain0),
+    Ledger0 = blockchain_ledger_v1:remove_context(?MODULE:ledger(Chain0)),
     Ledger = case blockchain_ledger_v1:mode(Ledger0) of
         delayed ->
             blockchain_ledger_v1:mode(active, Ledger0);
@@ -1114,7 +1112,7 @@ can_add_block(Block, Blockchain) ->
     end.
 
 get_key_or_keys(Ledger) ->
-    case blockchain:config(?use_multi_keys, Ledger) of
+    case ?get_var(?use_multi_keys, Ledger) of
         {ok, true} ->
             case blockchain_ledger_v1:multi_keys(Ledger) of
                 {ok, _} = Result -> Result;
@@ -1167,13 +1165,22 @@ add_block_(Block, Blockchain, Syncing) ->
                             lager:error("Error absorbing transaction, Ignoring Hash: ~p, Reason: ~p", [blockchain_block:hash_block(Block), Reason]),
                             case application:get_env(blockchain, drop_snapshot_cache_on_absorb_failure, true) of
                                 true ->
-                                    lager:info("dropping all snapshots from cache"),
-                                    blockchain_ledger_v1:drop_snapshots(Ledger);
+                                    case application:get_env(blockchain, '$drop_cache_once', false) of
+                                        false ->
+                                            lager:info("dropping all snapshots from cache"),
+                                            blockchain_ledger_v1:drop_snapshots(Ledger),
+                                            application:set_env(blockchain, '$drop_cache_once', true);
+                                        true ->
+                                            lager:info("previous drop cache ineffective, pausing sync"),
+                                            blockchain_worker:pause_sync_cast()
+                                    end;
                                 false ->
                                     ok
                             end,
                             Error;
                         {ok, KeysPayload} ->
+                            %% we managed to sync a block, so clear the drop cache limiter if set
+                            application:unset_env(blockchain, '$drop_cache_once'),
                             run_absorb_block_hooks(Syncing, Hash, Blockchain, KeysPayload)
                     end;
                 plausible ->
@@ -1228,18 +1235,26 @@ process_snapshot(ConsensusHash, MyAddress, Signers,
                                 );
                             {ok, Blocks} ->
                                 Infos = blockchain_ledger_snapshot_v1:get_infos(Blockchain),
+                                SnapStart = erlang:monotonic_time(millisecond),
                                 case blockchain_ledger_snapshot_v1:snapshot(Ledger, Blocks, Infos) of
                                     {ok, Snap} ->
+                                        SnapVersion = blockchain_ledger_snapshot_v1:version(Snap),
                                         case blockchain_ledger_snapshot_v1:hash(Snap) of
                                             ConsensusHash ->
-                                                {ok, _, ConsensusHash} = add_snapshot(Snap, ConsensusHash, Blockchain);
+                                                {ok, {_, ConsensusHash, Size}} = SnapResult = add_snapshot(Snap, ConsensusHash, Blockchain),
+                                                telemetry:execute([blockchain, snapshot, generate], #{duration => erlang:monotonic_time(millisecond) - SnapStart, size => Size},
+                                                                                                    #{blocks => length(Blocks), mode => delayed, version => SnapVersion}),
+                                                SnapResult;
                                             OtherHash ->
                                                 lager:info("bad snapshot hash: ~p good ~p",
                                                            [OtherHash, ConsensusHash]),
                                                 case application:get_env(blockchain, save_bad_snapshot, false) of
                                                     true ->
                                                         lager:info("saving bad snapshot ~p", [OtherHash]),
-                                                        {ok, _, OtherHash} = add_snapshot(Snap, OtherHash, Blockchain);
+                                                        {ok, {_, OtherHash, Size}} = BadResult = add_snapshot(Snap, OtherHash, Blockchain),
+                                                        telemetry:execute([blockchain, snapshot, generate], #{duration => erlang:monotonic_time(millisecond) - SnapStart, size => Size},
+                                                                                                            #{blocks => length(Blocks), mode => delayed, version => SnapVersion}),
+                                                        BadResult;
                                                     false ->
                                                         ok
                                                 end,
@@ -1272,6 +1287,7 @@ replay_blocks(Chain, Syncing, LedgerHeight, ChainHeight) ->
                                       fun(FChain, _FHash) -> ok = run_gc_hooks(FChain, B) end,
                                       blockchain_block:is_rescue_block(B)) of
                   {ok, KeysPayload} ->
+                      application:unset_env(blockchain, '$drop_cache_once'),
                       run_absorb_block_hooks(Syncing, Hash, Chain, KeysPayload);
                   {error, Reason} ->
                       lager:error("Error absorbing transaction, "
@@ -1937,7 +1953,7 @@ missing_block(#blockchain{db=DB, default=DefaultCF}) ->
     end.
 
 -spec add_snapshot(blockchain_ledger_snapshot:snapshot(), blockchain()) ->
-    {ok, pos_integer(), binary()} | {error, any()}.
+    {ok, {pos_integer(), binary(), pos_integer()}} | {error, any()}.
 add_snapshot(Snapshot, Chain) ->
     try
         Hash = blockchain_ledger_snapshot_v1:hash(Snapshot),
@@ -1948,7 +1964,7 @@ add_snapshot(Snapshot, Chain) ->
     end.
 
 -spec add_snapshot(blockchain_ledger_snapshot:snapshot(), binary(), blockchain()) ->
-    {ok, pos_integer(), binary()} | {error, any()}.
+    {ok, {pos_integer(), binary(), pos_integer()}} | {error, any()}.
 add_snapshot(Snapshot, Hash, #blockchain{db=DB, snapshots=SnapshotsCF}=Chain) ->
     try
         Height = blockchain_ledger_snapshot_v1:height(Snapshot),
@@ -1962,7 +1978,7 @@ add_snapshot(Snapshot, Hash, #blockchain{db=DB, snapshots=SnapshotsCF}=Chain) ->
         ok = rocksdb:write_batch(DB, Batch0, []),
         BinSnap = blockchain_ledger_snapshot_v1:serialize(Snapshot),
         case add_bin_snapshot(BinSnap, Height, Hash, Chain) of
-            ok -> {ok, Height, Hash};
+            ok -> {ok, {Height, Hash, iolist_size(BinSnap)}};
             Other -> Other
         end
     catch What:Why:Stack ->
@@ -2674,6 +2690,7 @@ init_blessed_snapshot(Blockchain, _HashAndHeight={Hash, Height0}) when is_binary
                   case blockchain_ledger_snapshot_v1:deserialize(BinSnapOrFile) of
                       {ok, Snap} ->
                           lager:info("Got snapshot for height ~p - attempting install", [Height0]),
+                          LoadStart = erlang:monotonic_time(millisecond),
                           %% do the install in-line here vs making a blocking call to
                           %% blockchain_worker
                           OldLedger = blockchain:ledger(Blockchain),
@@ -2698,6 +2715,13 @@ init_blessed_snapshot(Blockchain, _HashAndHeight={Hash, Height0}) when is_binary
                                   blockchain_ledger_v1:clean(OldLedger),
                                   %% TODO proper error checking and recovery/retry
                                   NewLedger = blockchain_ledger_snapshot_v1:import(Blockchain, SnapHeight, Hash, Snap, BinSnapOrFile),
+                                  {SnapSource, ByteSize} = case BinSnapOrFile of
+                                                               {file, Filename} -> {file, filelib:file_size(Filename)};
+                                                               <<Bin/binary>>  -> {binary, byte_size(Bin)}
+                                                           end,
+                                  Version = blockchain_ledger_snapshot_v1:version(Snap),
+                                  telemetry:execute([blockchain, snapshot, load], #{duration => erlang:monotonic_time(millisecond) - LoadStart, size => ByteSize},
+                                                                                  #{height => SnapHeight, hash => Hash, version => Version, source => SnapSource}),
                                   blockchain:ledger(NewLedger, Blockchain)
                           end;
                         Other ->
@@ -2846,7 +2870,7 @@ is_block_plausible(Block, Chain) ->
                     Signees = blockchain_block:verified_signees(Block),
 
                     SigThreshold =
-                    case blockchain:config(?election_version, blockchain:ledger(Chain)) of
+                    case ?get_var(?election_version, blockchain:ledger(Chain)) of
                         {ok, 5} -> (2 * F) + 1;         %% much higher v5 onwards
                         _ -> F + 1                      %% maintain old behavior
                     end,
@@ -3134,6 +3158,7 @@ info_cf(Chain) -> Chain#blockchain.info.
 -ifdef(TEST).
 
 new_test() ->
+    blockchain_sup:cream_caches_init(),
     BaseDir = test_utils:tmp_dir("new_test"),
     Block = blockchain_block:new_genesis_block([]),
     Hash = blockchain_block:hash_block(Block),
@@ -3144,6 +3169,7 @@ new_test() ->
     ?assertEqual({ok, Block}, head_block(Chain)),
     ?assertEqual({ok, Block}, get_block(Hash, Chain)),
     ?assertEqual({ok, Block}, get_block(1, Chain)),
+    blockchain_sup:cream_caches_clear(),
     test_utils:cleanup_tmp_dir(BaseDir).
 
 % ledger_test() ->
@@ -3158,7 +3184,6 @@ blocks_test_() ->
              meck:expect(blockchain_ledger_v1, consensus_members, fun(_) ->
                                                                           {ok, []}
                                                                   end),
-             meck:new(blockchain_block, [passthrough]),
              meck:expect(blockchain_block, verify_signatures, fun(_, _, _, _) ->
                                                                       {true, undefined}
                                                               end),
@@ -3180,6 +3205,8 @@ blocks_test_() ->
 
              meck:new(blockchain_gossip_handler),
              meck:expect(blockchain_gossip_handler, regossip_block, fun(_Block, _Height, _Hash, _SwarmTID) -> ok end),
+
+             blockchain_sup:cream_caches_init(),
 
              {ok, Pid} = blockchain_lock:start_link(),
 
@@ -3228,7 +3255,8 @@ blocks_test_() ->
              ?assert(meck:validate(blockchain_swarm)),
              meck:unload(blockchain_swarm),
              meck:unload(blockchain_gossip_handler),
-             test_utils:cleanup_tmp_dir(TmpDir)
+             test_utils:cleanup_tmp_dir(TmpDir),
+             blockchain_sup:cream_caches_clear()
      end}.
 
 get_block_test_() ->

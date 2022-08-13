@@ -29,6 +29,16 @@
 -define(EVT_MGR, blockchain_event_mgr).
 -define(POC_EVT_MGR, blockchain_poc_event_mgr).
 
+%% cache names
+-define(score_cache, score_cache).
+-define(var_cache, var_cache).
+-define(region_cache, region_cache).
+-define(gw_cache, gw_cache).
+-define(fp_cache, fp_cache).
+-define(routing_cache, routing_cache).
+-define(witness_cache, witness_cache).
+-define(sc_server_cache, routing_cache).
+
 -define(BC_UPGRADE_NAMES, [
     <<"gateway_v2">>,
     <<"hex_targets">>,
@@ -40,7 +50,8 @@
     <<"clear_scores">>,
     <<"clear_scores2">>,
     <<"nonce_rescue">>,
-    <<"poc_upgrade">>
+    <<"poc_upgrade">>,
+    <<"h3dex_memoize">>
 ]).
 
 -define(bones(HNT), HNT * 100000000).

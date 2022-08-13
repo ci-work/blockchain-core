@@ -19,9 +19,11 @@
 init_per_suite(Cfg) ->
     {ok, _} = application:ensure_all_started(lager),
     {ok, _} = application:ensure_all_started(telemetry),
+    blockchain_sup:cream_caches_init(),
     Cfg.
 
 end_per_suite(_) ->
+    blockchain_sup:cream_caches_clear(),
     ok.
 
 all() ->
@@ -127,7 +129,7 @@ basic_test(DeserializeFrom, Cfg0) ->
     ?assertEqual([], DiffAB),
 
     HashC = blockchain_ledger_snapshot_v1:hash(SnapshotC),
-    {ok, Height2, HashC2} = blockchain:add_snapshot(SnapshotC, Chain),
+    {ok, {Height2, HashC2, _Size}} = blockchain:add_snapshot(SnapshotC, Chain),
     ?assertEqual(Height1, Height2),
     ?assertEqual(HashC, HashC2),
     {ok, SnapshotDBin} = blockchain:get_snapshot(HashC, Chain),

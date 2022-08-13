@@ -36,7 +36,7 @@
     target_sync/3,
     sync/0,
     cancel_sync/0,
-    pause_sync/0,
+    pause_sync/0, pause_sync_cast/0,
     sync_paused/0,
 
     set_resyncing/3,
@@ -195,6 +195,9 @@ cancel_sync() ->
 
 pause_sync() ->
     gen_server:call(?SERVER, pause_sync, infinity).
+
+pause_sync_cast() ->
+    gen_server:cast(?SERVER, pause_sync).
 
 maybe_sync() ->
     gen_server:cast(?SERVER, maybe_sync).
@@ -447,7 +450,7 @@ handle_call(Msg, _From, #state{blockchain=undefined}=State) ->
     lager:debug("Called when blockchain=undefined. Returning undefined. Msg: ~p", [Msg]),
     {reply, undefined, State};
 handle_call(num_consensus_members, _From, #state{blockchain = Chain} = State) ->
-    {ok, N} = blockchain:config(?num_consensus_members, blockchain:ledger(Chain)),
+    {ok, N} = ?get_var(?num_consensus_members, blockchain:ledger(Chain)),
     {reply, N, State};
 handle_call(consensus_addrs, _From, #state{blockchain=Chain}=State) ->
     {reply, blockchain_ledger_v1:consensus_members(blockchain:ledger(Chain)), State};
@@ -486,13 +489,14 @@ handle_call({install_snapshot, Height, Hash, Snapshot, BinSnap}, _From,
     Halt = application:get_env(blockchain, halt_on_reset, true),
     case Mode == reset andalso Halt of
         false ->
+            LoadStart = erlang:monotonic_time(millisecond),
             ok = blockchain_lock:acquire(),
             OldLedger = blockchain:ledger(Chain),
             blockchain_ledger_v1:clean(OldLedger),
             %% TODO proper error checking and recovery/retry
             NewLedger = blockchain_ledger_snapshot_v1:import(Chain, Height, Hash, Snapshot, BinSnap),
             Chain1 = blockchain:ledger(NewLedger, Chain),
-            ok = blockchain:mark_upgrades(?BC_UPGRADE_NAMES, NewLedger),
+            Chain2 = blockchain:process_upgrades(Chain1),
             try
                 %% There is a hole in the snapshot history where this will be
                 %% true, but later it will have come from the snap.
@@ -513,7 +517,8 @@ handle_call({install_snapshot, Height, Hash, Snapshot, BinSnap}, _From,
                     blockchain_ledger_v1:commit_context(NewLedger1)
             end,
             remove_handlers(SwarmTID),
-            NewChain = blockchain:delete_temp_blocks(Chain1),
+            application:unset_env(blockchain, '$drop_cache_once'),
+            NewChain = blockchain:delete_temp_blocks(Chain2),
             notify({new_chain, NewChain}),
             {ok, GossipRef} = add_handlers(SwarmTID, NewChain),
             {ok, LedgerHeight} = blockchain_ledger_v1:current_height(NewLedger),
@@ -526,6 +531,13 @@ handle_call({install_snapshot, Height, Hash, Snapshot, BinSnap}, _From,
             end,
             blockchain_lock:release(),
             true = ets:insert(?CACHE, {?CHAIN, NewChain}),
+            {SnapSource, ByteSize} = case BinSnap of
+                                         {file, Filename} -> {file, filelib:file_size(Filename)};
+                                         Bin when is_binary(Bin) -> {binary, byte_size(Bin)}
+                                     end,
+            Version = blockchain_ledger_snapshot_v1:version(Snapshot),
+            telemetry:execute([blockchain, snapshot, load], #{duration => erlang:monotonic_time(millisecond) - LoadStart, size => ByteSize},
+                                                            #{height => Height, hash => Hash, version => Version, source => SnapSource}),
             {reply, ok, maybe_sync(State#state{mode = normal, sync_paused = false,
                                                blockchain = NewChain, gossip_ref = GossipRef})};
         true ->
@@ -633,6 +645,8 @@ handle_cast({set_resyncing, _Block, _Blockchain, _Syncing}, State) ->
 
 handle_cast(maybe_sync, State) ->
     {noreply, maybe_sync(State)};
+handle_cast(pause_sync, State) ->
+    {noreply, pause_sync(State)};
 handle_cast({target_sync, Target, Heights, GossipedHash}, State) ->
     {noreply, target_sync(Target, Heights, GossipedHash, State)};
 handle_cast({submit_txn, Txn}, State) ->
@@ -827,8 +841,9 @@ integrate_genesis_block_(
             {{error, block_not_genesis}, S0};
         true ->
             ok = blockchain:integrate_genesis(GenesisBlock, Chain),
-            Ledger = blockchain:ledger(Chain),
+            Ledger = blockchain_ledger_v1:new_context(blockchain:ledger(Chain)),
             blockchain:mark_upgrades(?BC_UPGRADE_NAMES, Ledger),
+            blockchain_ledger_v1:commit_context(Ledger),
             [ConsensusAddrs] =
                 [
                     blockchain_txn_consensus_group_v1:members(T)
