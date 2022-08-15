@@ -953,6 +953,7 @@ start_sync(#state{blockchain = Chain, swarm_tid = SwarmTID} = State) ->
     case get_random_peer(SwarmTID) of
         no_peers ->
             %% try again later when there's peers
+            lager:info("no_peers triggered in get_random_peer"),
             schedule_sync(State);
         RandomPeer ->
             {Pid, Ref} = start_block_sync(SwarmTID, Chain, RandomPeer, [], <<>>),
