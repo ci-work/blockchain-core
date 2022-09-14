@@ -568,6 +568,7 @@
 -define(validator_hb_reactivation_limit, validator_hb_reactivation_limit). % addresses
 -define(validator_penalty_filter, validator_penalty_filter). % float
 -define(validator_key_check, validator_key_check). % boolean
+-define(validator_stale_heartbeat_check, validator_stale_heartbeat_check). % boolean
 -define(stake_withdrawal_cooldown, stake_withdrawal_cooldown). % blocks
 -define(stake_withdrawal_max, stake_withdrawal_max). % blocks
 %% -define(maximum_overstake, maximum_overstake). % float multiple of min stake
@@ -643,3 +644,5 @@
 
 %% bugfix sync limiter for balance break bug
 -define(balance_erase_bugfix, balance_erase_bugfix).
+%% bugfix security reward var
+-define(security_reward_bugfix, security_reward_bugfix).

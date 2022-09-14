@@ -38,10 +38,10 @@ destroy_memoization() ->
         undefined ->
             true;
         _ ->
-          ets:delete(?PRE_CLIP_TBL),
-          ets:delete(?PRE_UNCLIP_TBL),
-          _ = erase(?PRE_CLIP_TBL),
-          _ = erase(?PRE_UNCLIP_TBL),
+            try ets:delete(get(?PRE_CLIP_TBL)) catch _:_ -> true end,
+            try ets:delete(get(?PRE_UNCLIP_TBL)) catch _:_ -> true end,
+            _ = erase(?PRE_CLIP_TBL),
+            _ = erase(?PRE_UNCLIP_TBL),
           true
     end.
 

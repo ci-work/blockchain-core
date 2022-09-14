@@ -1269,6 +1269,12 @@ validate_var(?balance_erase_bugfix, Value) ->
         _ -> throw({error, {invalid_balance_erase_bugfix, Value}})
     end;
 
+validate_var(?security_reward_bugfix, Value) ->
+    case Value of
+        true -> ok;
+        _ -> throw({error, {invalid_security_reward_bugfix, Value}})
+    end;
+
 %% general txn vars
 
 validate_var(?txn_field_validation_version, Value) ->
@@ -1515,6 +1521,11 @@ validate_var(?validator_key_check, Value) ->
     case Value of
         Val when is_boolean(Val) -> ok;
         _ -> throw({error, {invalidate_validator_key_check, Value}})
+    end;
+validate_var(?validator_stale_heartbeat_check, Value) ->
+    case Value of
+        Val when is_boolean(Val) -> ok;
+        _ -> throw({error, {invalid_validator_stale_heartbeat_check, Value}})
     end;
 %% TODO fix this var
 validate_var(?stake_withdrawal_cooldown, Value) ->
