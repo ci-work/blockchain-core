@@ -592,9 +592,6 @@ ledger_at(Height, Chain0, ForceRecalc) ->
             {ok, blockchain_ledger_v1:new_context(Ledger)};
         {ok, CurrentHeight} ->
             DelayedLedger = blockchain_ledger_v1:mode(delayed, Ledger),
-            DH = blockchain_ledger_v1:current_height(DelayedLedger),
-            lager:info("height check, height: ~p, DelayedHeight: ~p", [Height, DH]),
-            lager:info("height check, CurrentHeight: ~p, Delay: ~p", [CurrentHeight, Delay]),
             case blockchain_ledger_v1:current_height(DelayedLedger) of
                 {ok, Height} when Height >= CurrentHeight - Delay ->
                     %% Delayed height is the height we want, just return a new context
@@ -622,7 +619,8 @@ ledger_at(Height, Chain0, ForceRecalc) ->
                 {ok, DelayedHeight} when Height < DelayedHeight orelse Height < CurrentHeight - Delay ->
                     %% delayed ledger is lagging further than it should, but do not return a
                     %% ledger this old, because some transactions use ledger_at as a validity check
-                    lager:info("height too old, height: ~p, delayed: ~p", [Height, DelayedHeight]),
+                    lager:info("height check, height: ~p, DelayedHeight: ~p", [Height, DelayedHeight]),
+                    lager:info("height check, CurrentHeight: ~p, Delay: ~p", [CurrentHeight, Delay]),
                     {error, height_too_old};
                 {error, _}=Error ->
                     Error
