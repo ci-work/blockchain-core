@@ -593,7 +593,7 @@ ledger_at(Height, Chain0, ForceRecalc) ->
         {ok, CurrentHeight} ->
             DelayedLedger = blockchain_ledger_v1:mode(delayed, Ledger),
             DH = blockchain_ledger_v1:current_height(DelayedLedger),
-            lager:info("height check, height: ~p, delayed: ~p", [Height, DelayedHeight]),
+            lager:info("height check, height: ~p, DelayedHeight: ~p", [Height, DH]),
             lager:info("height check, CurrentHeight: ~p, Delay: ~p", [CurrentHeight, Delay]),
             case blockchain_ledger_v1:current_height(DelayedLedger) of
                 {ok, Height} when Height >= CurrentHeight - Delay ->
