@@ -619,9 +619,10 @@ ledger_at(Height, Chain0, ForceRecalc) ->
                                     Error
                             end
                     end;
-                {ok, _DelayedHeight} when Height < CurrentHeight - Delay ->
+                {ok, DelayedHeight} when Height < DelayedHeight orelse Height < CurrentHeight - Delay ->
                     %% delayed ledger is lagging further than it should, but do not return a
                     %% ledger this old, because some transactions use ledger_at as a validity check
+                    lager:info("height too old, height: ~p, delayed: ~p", [Height, DelayedHeight]),
                     {error, height_too_old};
                 {error, _}=Error ->
                     Error
