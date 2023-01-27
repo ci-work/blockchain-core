@@ -655,3 +655,21 @@
 -define(security_reward_bugfix, security_reward_bugfix).
 %% bugfix security zero reward var
 -define(security_zero_reward_bugfix, security_zero_reward_bugfix).
+
+
+%% var to halt the chain
+-define(halt_chain, halt_chain).
+
+%% var to enable subnetwork mint without debiting token_treasury
+-define(subnetwork_mint, subnetwork_mint).
+
+%% var to fix zero reward_shares accumulation
+-define(zero_reward_shares_fix, zero_reward_shares_fix).
+
+-define(increment_var_nonce_in_rescue_block, increment_var_nonce_in_rescue_block).
+
+%% whether to isolate var txns into their own block to reduce var cache related issues
+-define(isolate_var_txns, isolate_var_txns).
+
+%% whether to bypass token treasury amount when validating subnetwork_rewards_v1 txn
+-define(bypass_token_treasury, bypass_token_treasury).

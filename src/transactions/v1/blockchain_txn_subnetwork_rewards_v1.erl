@@ -134,9 +134,13 @@ is_valid(Txn, Chain) ->
     try
         %% this needs to somehow limit the mint here?  but if there is only premine I don't
         %% understand how we do that.
-        case TotalRewards =< blockchain_ledger_subnetwork_v1:token_treasury(Subnet) of
-            true -> ok;
-            false -> throw({insufficient_tokens_to_fulfil_rewards, Tokens, TotalRewards})
+        case ?get_var(?bypass_token_treasury, Ledger) of
+            {ok, true} -> ok;
+            _ ->
+                case TotalRewards =< blockchain_ledger_subnetwork_v1:token_treasury(Subnet) of
+                    true -> ok;
+                    false -> throw({insufficient_tokens_to_fulfil_rewards, Tokens, TotalRewards})
+                end
         end,
         BaseTxn = Txn#blockchain_txn_subnetwork_rewards_v1_pb{reward_server_signature = <<>>},
         Artifact = blockchain_txn_subnetwork_rewards_v1_pb:encode_msg(BaseTxn),
@@ -185,10 +189,15 @@ absorb(Txn, Chain) ->
     %% these rewards are the same no matter the ledger
     TokenType = token_type(Txn),
     TotalRewards = total_rewards(Txn),
-    %% Remove total_rewards from the token treasury
     {ok, Subnet} = blockchain_ledger_v1:find_subnetwork_v1(TokenType, Ledger),
-    TokenTreasury = blockchain_ledger_subnetwork_v1:token_treasury(Subnet),
-    Subnet1 = blockchain_ledger_subnetwork_v1:token_treasury(Subnet, TokenTreasury - TotalRewards),
+    Subnet1 = case ?get_var(?subnetwork_mint, Ledger) of
+                  {ok, true} ->
+                      Subnet;
+                  _ ->
+                      %% Remove total_rewards from the token treasury if subnetwork_mint is not set to true
+                      TokenTreasury = blockchain_ledger_subnetwork_v1:token_treasury(Subnet),
+                      blockchain_ledger_subnetwork_v1:token_treasury(Subnet, TokenTreasury - TotalRewards)
+              end,
     %% Absorb the rewards
     ok = absorb_rewards(TokenType, rewards(Txn), Ledger),
     %% Save the subnetwork

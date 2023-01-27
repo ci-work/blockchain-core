@@ -446,7 +446,10 @@ to_json(Txn, Opts) ->
                 [#{account => ?BIN_TO_B58(O),
                    gateway => undefined,
                    amount => Amount,
-                   type => Type} | Acc]
+                   type => Type} | Acc];
+            ({oracle, _Type, _O}, _Amount, _Ledger, Acc) ->
+                %% oracles don't get rewards
+                Acc
         end,
     Rewards = case lists:keyfind(chain, 1, Opts) of
         {chain, Chain} ->
@@ -677,7 +680,10 @@ prepare_rewards_v2_txns(Results, Ledger) ->
                                                                  fun(Balance) -> Balance + Amt end,
                                                                  Amt,
                                                                  Acc)
-                                         end
+                                         end;
+                                    {oracle, _Type, _O} ->
+                                        %% no rewards for offchain poc oracles
+                                        Acc
                                 end % Entry case
                         end, % function
                         Rewards,
@@ -786,6 +792,12 @@ get_reward_vars(Start, End, Ledger) ->
             _ -> gateway
         end,
 
+    ZeroRewardSharesFix =
+        case ?get_var(?zero_reward_shares_fix, Ledger) of
+            {ok, true} -> true;
+            _ -> false
+        end,
+
     EpochReward = calculate_epoch_reward(Start, End, Ledger),
     #{
         monthly_reward => MonthlyReward,
@@ -811,7 +823,8 @@ get_reward_vars(Start, End, Ledger) ->
         election_restart_interval => ElectionRestartInterval,
         block_time => BlockTime,
         witness_reward_decay_rate => WitnessRewardDecayRate,
-        witness_reward_decay_exclusion => WitnessRewardDecayExclusion
+        witness_reward_decay_exclusion => WitnessRewardDecayExclusion,
+        zero_reward_shares_fix => ZeroRewardSharesFix
     }.
 
 -spec calculate_epoch_reward(pos_integer(), pos_integer(), blockchain_ledger_v1:ledger()) -> float().
@@ -1057,7 +1070,7 @@ normalize_challengee_rewards(ChallengeeRewards, #{epoch_reward := EpochReward,
                                 Acc0 :: rewards_share_map() ) -> rewards_share_map().
 poc_challengees_rewards_(_Vars, [], _StaticPath, _Txn, _Chain, _Ledger, _, _, Acc) ->
     Acc;
-poc_challengees_rewards_(#{poc_version := Version, poc_challenger_type := oracle},
+poc_challengees_rewards_(#{poc_version := Version, poc_challenger_type := oracle, zero_reward_shares_fix := ZeroRewardSharesFix},
                          Path,
                          _StaticPath,
                          _Txn,
@@ -1073,8 +1086,14 @@ poc_challengees_rewards_(#{poc_version := Version, poc_challenger_type := oracle
                         case blockchain_poc_path_element_v1:receipt(Elem) of
                             undefined -> Acc;
                             Receipt ->
-                                Shares = blockchain_poc_receipt_v1:reward_shares(Receipt),
-                                maps:update_with(Challengee, fun(V) -> V + Shares end, Shares, Acc)
+                                case {blockchain_poc_receipt_v1:reward_shares(Receipt), ZeroRewardSharesFix} of
+                                    {N, true} when N == 0 ->
+                                        %% ZeroRewardSharesFix is true, but we have 0 shares, do nothing
+                                        Acc;
+                                    {Shares, _} ->
+                                        %% Continue doing the old thing
+                                        maps:update_with(Challengee, fun(V) -> V + Shares end, Shares, Acc)
+                                end
                         end
                 end, Acc0, Path);
 poc_challengees_rewards_(#{poc_version := Version}=Vars,
@@ -1266,7 +1285,8 @@ normalize_reward_unit(Unit) -> Unit.
 poc_witness_reward(Txn, AccIn,
                    _Chain, _Ledger,
                    #{ poc_version := POCVersion,
-                      poc_challenger_type := oracle}) when is_integer(POCVersion)
+                      poc_challenger_type := oracle,
+                      zero_reward_shares_fix := ZeroRewardSharesFix}) when is_integer(POCVersion)
                                                        andalso POCVersion >= 9 ->
     TxnType = blockchain_txn:type(Txn),
     Path = TxnType:path(Txn),
@@ -1274,9 +1294,17 @@ poc_witness_reward(Txn, AccIn,
     lists:foldl(fun(Elem, Acc) ->
                         Witnesses = blockchain_poc_path_element_v1:witnesses(Elem),
                         lists:foldl(fun(Witness, Acc2) ->
-                                            Shares = blockchain_poc_witness_v1:reward_shares(Witness),
-                                            WitnessKey = blockchain_poc_witness_v1:gateway(Witness),
-                                            maps:update_with(WitnessKey, fun({C, V}) -> {C+1, V + Shares} end, {1, Shares}, Acc2)
+                                            case {blockchain_poc_witness_v1:reward_shares(Witness), ZeroRewardSharesFix}
+                                            of
+                                                {N, true} when N == 0 ->
+                                                    %% ZeroRewardSharesFix is true, but we have no shares, do nothing
+                                                    Acc2;
+                                                {Shares, _} ->
+                                                    %% Continue doing the old thing
+                                                    WitnessKey = blockchain_poc_witness_v1:gateway(Witness),
+                                                    maps:update_with(WitnessKey, fun({C, V}) -> {C+1, V + Shares} end,
+                                                                     {1, Shares}, Acc2)
+                                            end
                                     end, Acc, Witnesses)
                 end, AccIn, Path);
 poc_witness_reward(Txn, AccIn,
